@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: financial-report-app
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT
+    envVars:
+      - key: DB_PATH
+        value: /var/data/financial_reports.db
+    disk:
+      name: financial-report-db
+      mountPath: /var/data
+      sizeGB: 1
