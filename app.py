@@ -175,6 +175,9 @@ def clean_text(value: object) -> str:
 
 
 TOTAL_SUBSHEETS = ["勞健退", "薪資", "三節", "獎金", "餐費", "員工福利"]
+TOTAL_MAIN_ITEM_COLS = ["勞健退", "薪資", "三節", "獎金", "餐費", "員工福利"]
+TOTAL_MAIN_ALL_COLS = ["公司名", "案場", *TOTAL_MAIN_ITEM_COLS, "人事成本總計", "原始總計"]
+COMPANY_OPTIONS = ["得意佳", "匯鴻", "鴻源", "寶得", "得威", "賦鼎"]
 
 
 def parse_manual_category(note: object) -> str:
@@ -183,6 +186,22 @@ def parse_manual_category(note: object) -> str:
     if match:
         return match.group(1).strip()
     return ""
+
+
+def parse_note_value(note: object, key: str) -> str:
+    text = "" if pd.isna(note) else str(note)
+    match = re.search(rf"{re.escape(key)}:([^;]+)", text)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def parse_note_number(note: object, key: str) -> float:
+    return to_number(parse_note_value(note, key))
+
+
+def append_note_parts(parts: list[str]) -> str:
+    return ";".join([p for p in parts if str(p).strip()])
 
 
 def get_local_ip() -> str:
@@ -196,18 +215,34 @@ def get_local_ip() -> str:
         return "127.0.0.1"
 
 
+def get_project_options(df_all: pd.DataFrame, company_keyword: str) -> list[str]:
+    if df_all.empty:
+        return []
+    mask = df_all["company_name"].fillna("").astype(str).str.contains(company_keyword, regex=False)
+    options = (
+        df_all.loc[mask, "project_name"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace("", pd.NA)
+        .dropna()
+        .unique()
+        .tolist()
+    )
+    return sorted(options)
+
+
 def to_main_like_columns(df: pd.DataFrame, category: str) -> pd.DataFrame:
     if df.empty:
-        return pd.DataFrame(columns=["公司名", "案場", "薪資", "獎金", "員工福利", "人事成本總計", "原始總計"])
+        return pd.DataFrame(columns=TOTAL_MAIN_ALL_COLS)
 
     out = pd.DataFrame()
     out["公司名"] = df["公司名"]
     out["案場"] = df["案場"]
-    out["薪資"] = df["金額"] if category == "薪資" else 0.0
-    out["獎金"] = df["金額"] if category == "獎金" else 0.0
-    out["員工福利"] = df["金額"] if category == "員工福利" else 0.0
-    out["人事成本總計"] = out["薪資"] + out["獎金"] + out["員工福利"]
-    out["原始總計"] = df["金額"] if category in {"勞健退", "三節", "餐費"} else out["人事成本總計"]
+    for item in TOTAL_MAIN_ITEM_COLS:
+        out[item] = df["金額"] if category == item else 0.0
+    out["人事成本總計"] = out[TOTAL_MAIN_ITEM_COLS].sum(axis=1)
+    out["原始總計"] = out["人事成本總計"]
     return out
 
 
@@ -222,8 +257,11 @@ def build_main_total_frame(df_all: pd.DataFrame) -> pd.DataFrame:
             {
                 "公司名": str(row.get("company_name") or "").strip(),
                 "案場": str(row.get("project_name") or "").strip(),
+                "勞健退": 0.0,
                 "薪資": float(row.get("salary") or 0),
+                "三節": 0.0,
                 "獎金": float(row.get("bonus") or 0),
+                "餐費": 0.0,
                 "員工福利": float(row.get("welfare") or 0),
                 "原始總計": float(row.get("total_income") or 0),
             }
@@ -233,14 +271,20 @@ def build_main_total_frame(df_all: pd.DataFrame) -> pd.DataFrame:
         bonus = float(row.get("bonus") or 0)
         welfare = float(row.get("welfare") or 0)
         original = float(row.get("total_income") or 0)
+        labor = parse_note_number(row.get("note"), "勞健退")
+        festival = parse_note_number(row.get("note"), "三節")
+        meal = parse_note_number(row.get("note"), "餐費")
         if original <= 0:
-            original = salary + bonus + welfare
+            original = labor + salary + festival + bonus + meal + welfare
         rows.append(
             {
                 "公司名": str(row.get("company_name") or "").strip(),
                 "案場": str(row.get("project_name") or "").strip(),
+                "勞健退": labor,
                 "薪資": salary,
+                "三節": festival,
                 "獎金": bonus,
+                "餐費": meal,
                 "員工福利": welfare,
                 "原始總計": original,
             }
@@ -250,8 +294,11 @@ def build_main_total_frame(df_all: pd.DataFrame) -> pd.DataFrame:
             {
                 "公司名": str(row.get("company_name") or "").strip(),
                 "案場": str(row.get("project_name") or "").strip(),
+                "勞健退": parse_note_number(row.get("note"), "勞健退"),
                 "薪資": float(row.get("salary") or 0),
+                "三節": parse_note_number(row.get("note"), "三節"),
                 "獎金": float(row.get("bonus") or 0),
+                "餐費": parse_note_number(row.get("note"), "餐費"),
                 "員工福利": float(row.get("welfare") or 0),
                 "原始總計": float(row.get("total_income") or 0),
             }
@@ -259,10 +306,10 @@ def build_main_total_frame(df_all: pd.DataFrame) -> pd.DataFrame:
 
     grouped = pd.DataFrame(rows)
     if grouped.empty:
-        return pd.DataFrame(columns=["公司名", "案場", "薪資", "獎金", "員工福利", "人事成本總計", "原始總計"])
-    grouped = grouped.groupby(["公司名", "案場"], as_index=False)[["薪資", "獎金", "員工福利", "原始總計"]].sum()
-    grouped["人事成本總計"] = grouped["薪資"] + grouped["獎金"] + grouped["員工福利"]
-    return grouped[["公司名", "案場", "薪資", "獎金", "員工福利", "人事成本總計", "原始總計"]]
+        return pd.DataFrame(columns=TOTAL_MAIN_ALL_COLS)
+    grouped = grouped.groupby(["公司名", "案場"], as_index=False)[[*TOTAL_MAIN_ITEM_COLS, "原始總計"]].sum()
+    grouped["人事成本總計"] = grouped[TOTAL_MAIN_ITEM_COLS].sum(axis=1)
+    return grouped[TOTAL_MAIN_ALL_COLS]
 
 
 def build_total_subsheet_frames(df_all: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -621,13 +668,22 @@ with tab_report:
             if grouped.empty:
                 st.warning("尚未匯入「薪資占比」資料。")
             else:
+                visible_total_cols = st.multiselect(
+                    "總表顯示項目",
+                    options=TOTAL_MAIN_ALL_COLS,
+                    default=TOTAL_MAIN_ALL_COLS,
+                    key="visible_total_cols",
+                )
                 total_row = pd.DataFrame(
                     [
                         {
                             "公司名": "合計",
                             "案場": "",
+                            "勞健退": grouped["勞健退"].sum(),
                             "薪資": grouped["薪資"].sum(),
+                            "三節": grouped["三節"].sum(),
                             "獎金": grouped["獎金"].sum(),
+                            "餐費": grouped["餐費"].sum(),
                             "員工福利": grouped["員工福利"].sum(),
                             "人事成本總計": grouped["人事成本總計"].sum(),
                             "原始總計": grouped["原始總計"].sum(),
@@ -637,44 +693,99 @@ with tab_report:
                 display_df = pd.concat([grouped, total_row], ignore_index=True)
                 sub_frames = build_total_subsheet_frames(df_all)
                 editable_main = display_df.iloc[:-1].copy()
-                edited_main = st.data_editor(
-                    editable_main,
+                shown_cols = visible_total_cols if visible_total_cols else TOTAL_MAIN_ALL_COLS
+                edited_visible = st.data_editor(
+                    editable_main[shown_cols],
                     use_container_width=True,
                     hide_index=True,
                     key="main_report_inline_edit",
                     disabled=[],
                 )
+                edited_main = editable_main.copy()
+                for col in shown_cols:
+                    edited_main[col] = edited_visible[col]
                 if st.button("儲存這個主表格的修改", key="save_main_report_inline"):
                     # 以「調整量」方式儲存，確保可直接覆寫目前畫面數字
                     base = editable_main.copy()
                     now = edited_main.copy()
-                    for col in ["薪資", "獎金", "員工福利", "原始總計", "人事成本總計"]:
+                    for col in TOTAL_MAIN_ITEM_COLS + ["原始總計", "人事成本總計"]:
                         base[col] = pd.to_numeric(base[col], errors="coerce").fillna(0.0)
                         now[col] = pd.to_numeric(now[col], errors="coerce").fillna(0.0)
 
                     delete_records_by_source("總表主表調整")
                     adjust_records = []
                     for i in range(len(now)):
-                        d_salary = float(now.iloc[i]["薪資"] - base.iloc[i]["薪資"])
-                        d_bonus = float(now.iloc[i]["獎金"] - base.iloc[i]["獎金"])
-                        d_welfare = float(now.iloc[i]["員工福利"] - base.iloc[i]["員工福利"])
-                        d_total = float(now.iloc[i]["原始總計"] - base.iloc[i]["原始總計"])
-                        if abs(d_salary) < 1e-6 and abs(d_bonus) < 1e-6 and abs(d_welfare) < 1e-6 and abs(d_total) < 1e-6:
-                            continue
-                        adjust_records.append(
-                            {
-                                "sheet_name": "全案總表",
-                                "employee_name": "未指定",
-                                "company_name": str(now.iloc[i]["公司名"]),
-                                "project_name": str(now.iloc[i]["案場"]),
-                                "roc_year": None,
-                                "salary": d_salary,
-                                "bonus": d_bonus,
-                                "welfare": d_welfare,
-                                "total_income": d_total,
-                                "note": "inline_main_adjustment",
-                            }
-                        )
+                        old_company = str(base.iloc[i]["公司名"])
+                        old_project = str(base.iloc[i]["案場"])
+                        new_company = str(now.iloc[i]["公司名"])
+                        new_project = str(now.iloc[i]["案場"])
+                        old_vals = {col: float(base.iloc[i][col]) for col in TOTAL_MAIN_ITEM_COLS + ["原始總計"]}
+                        new_vals = {col: float(now.iloc[i][col]) for col in TOTAL_MAIN_ITEM_COLS + ["原始總計"]}
+
+                        if old_company == new_company and old_project == new_project:
+                            deltas = {col: new_vals[col] - old_vals[col] for col in TOTAL_MAIN_ITEM_COLS + ["原始總計"]}
+                            if all(abs(v) < 1e-6 for v in deltas.values()):
+                                continue
+                            adjust_records.append(
+                                {
+                                    "sheet_name": "全案總表",
+                                    "employee_name": "未指定",
+                                    "company_name": new_company,
+                                    "project_name": new_project,
+                                    "roc_year": None,
+                                    "salary": deltas["薪資"],
+                                    "bonus": deltas["獎金"],
+                                    "welfare": deltas["員工福利"],
+                                    "total_income": deltas["原始總計"],
+                                    "note": append_note_parts([
+                                        "inline_main_adjustment",
+                                        f"勞健退:{deltas['勞健退']}",
+                                        f"三節:{deltas['三節']}",
+                                        f"餐費:{deltas['餐費']}",
+                                    ]),
+                                }
+                            )
+                        else:
+                            if any(abs(v) > 1e-6 for v in old_vals.values()):
+                                adjust_records.append(
+                                    {
+                                        "sheet_name": "全案總表",
+                                        "employee_name": "未指定",
+                                        "company_name": old_company,
+                                        "project_name": old_project,
+                                        "roc_year": None,
+                                        "salary": -old_vals["薪資"],
+                                        "bonus": -old_vals["獎金"],
+                                        "welfare": -old_vals["員工福利"],
+                                        "total_income": -old_vals["原始總計"],
+                                        "note": append_note_parts([
+                                            "inline_main_adjustment",
+                                            f"勞健退:{-old_vals['勞健退']}",
+                                            f"三節:{-old_vals['三節']}",
+                                            f"餐費:{-old_vals['餐費']}",
+                                        ]),
+                                    }
+                                )
+                            if any(abs(v) > 1e-6 for v in new_vals.values()):
+                                adjust_records.append(
+                                    {
+                                        "sheet_name": "全案總表",
+                                        "employee_name": "未指定",
+                                        "company_name": new_company,
+                                        "project_name": new_project,
+                                        "roc_year": None,
+                                        "salary": new_vals["薪資"],
+                                        "bonus": new_vals["獎金"],
+                                        "welfare": new_vals["員工福利"],
+                                        "total_income": new_vals["原始總計"],
+                                        "note": append_note_parts([
+                                            "inline_main_adjustment",
+                                            f"勞健退:{new_vals['勞健退']}",
+                                            f"三節:{new_vals['三節']}",
+                                            f"餐費:{new_vals['餐費']}",
+                                        ]),
+                                    }
+                                )
                     if adjust_records:
                         save_import_records("總表主表調整", "inline_edit", adjust_records)
                     st.success("已儲存主表格修改。")
@@ -691,11 +802,14 @@ with tab_report:
                             "餐費": to_main_like_columns(sub_frames["餐費"], "餐費"),
                             "員工福利": to_main_like_columns(sub_frames["員工福利"], "員工福利"),
                         },
-                        numeric_cols=["薪資", "獎金", "員工福利", "人事成本總計", "原始總計"],
+                        numeric_cols=TOTAL_MAIN_ITEM_COLS + ["人事成本總計", "原始總計"],
                         title_prefix="全案總表",
                         column_fill_map={
+                            "勞健退": "FFF2CC",
                             "薪資": "FFF2CC",
+                            "三節": "FFF2CC",
                             "獎金": "FFF2CC",
+                            "餐費": "FFF2CC",
                             "員工福利": "FFF2CC",
                             "人事成本總計": "FCE4D6",
                             "原始總計": "E2F0D9",
@@ -708,30 +822,56 @@ with tab_report:
                 st.caption("此表模擬你原檔中的『全案_總表』主體資料區。")
 
                 st.markdown("### 手動新增資料")
-                add_tabs = st.tabs(["新增總表", "新增個人所得", "新增在職年統計"])
+                add_tabs = st.tabs(["新增總表", "新增個人資料"])
                 with add_tabs[0]:
+                    company_options = COMPANY_OPTIONS + ["自訂輸入"]
                     with st.form("manual_add_main_form", clear_on_submit=True):
-                        c1, c2 = st.columns(2)
+                        c1, c2, c3 = st.columns(3)
                         with c1:
-                            manual_company = st.text_input("公司名", key="add_main_company")
+                            manual_company_select = st.selectbox("公司名", company_options, key="add_main_company_select")
                         with c2:
-                            manual_project = st.text_input("案場", key="add_main_project")
-                        c3, c4, c5 = st.columns(3)
+                            selected_keyword = manual_company_select if manual_company_select != "自訂輸入" else ""
+                            project_options = get_project_options(df_all, selected_keyword)
+                            manual_project_select = st.selectbox(
+                                "案名",
+                                (project_options + ["自訂輸入"]) if project_options else ["自訂輸入"],
+                                key="add_main_project_select",
+                            )
                         with c3:
-                            manual_salary = st.number_input("薪資", min_value=0.0, step=1000.0, format="%.0f", key="add_main_salary")
+                            manual_date = st.date_input("日期", key="add_main_date")
+
+                        if manual_company_select == "自訂輸入":
+                            manual_company = st.text_input("自訂公司名", key="add_main_company_custom")
+                        else:
+                            manual_company = manual_company_select
+                        if manual_project_select == "自訂輸入":
+                            manual_project = st.text_input("自訂案名", key="add_main_project_custom")
+                        else:
+                            manual_project = manual_project_select
+
+                        c4, c5, c6 = st.columns(3)
                         with c4:
-                            manual_bonus = st.number_input("獎金", min_value=0.0, step=1000.0, format="%.0f", key="add_main_bonus")
+                            manual_labor = st.number_input("勞健退", min_value=0.0, step=1000.0, format="%.0f", key="add_main_labor")
                         with c5:
-                            manual_welfare = st.number_input("員工福利", min_value=0.0, step=1000.0, format="%.0f", key="add_main_welfare")
-                        c6, c7 = st.columns(2)
+                            manual_salary = st.number_input("薪資", min_value=0.0, step=1000.0, format="%.0f", key="add_main_salary")
                         with c6:
-                            manual_total = st.number_input("原始總計（可留 0 自動加總）", min_value=0.0, step=1000.0, format="%.0f", key="add_main_total")
+                            manual_festival = st.number_input("三節", min_value=0.0, step=1000.0, format="%.0f", key="add_main_festival")
+                        c7, c8, c9 = st.columns(3)
                         with c7:
+                            manual_bonus = st.number_input("獎金", min_value=0.0, step=1000.0, format="%.0f", key="add_main_bonus")
+                        with c8:
+                            manual_meal = st.number_input("餐費", min_value=0.0, step=1000.0, format="%.0f", key="add_main_meal")
+                        with c9:
+                            manual_welfare = st.number_input("員工福利", min_value=0.0, step=1000.0, format="%.0f", key="add_main_welfare")
+                        c10, c11 = st.columns(2)
+                        with c10:
+                            manual_total = st.number_input("原始總計（留 0 自動加總）", min_value=0.0, step=1000.0, format="%.0f", key="add_main_total")
+                        with c11:
                             manual_note = st.text_input("備註（可空白）", key="add_main_note")
                         submit_main = st.form_submit_button("新增總表資料")
                     if submit_main:
-                        if not manual_company.strip() or not manual_project.strip():
-                            st.error("請輸入公司名與案場。")
+                        if not str(manual_company).strip() or not str(manual_project).strip():
+                            st.error("請輸入公司名與案名。")
                         else:
                             save_import_records(
                                 "總表主表手動",
@@ -739,100 +879,139 @@ with tab_report:
                                 [{
                                     "sheet_name": "全案總表",
                                     "employee_name": "未指定",
-                                    "company_name": manual_company.strip(),
-                                    "project_name": manual_project.strip(),
+                                    "company_name": str(manual_company).strip(),
+                                    "project_name": str(manual_project).strip(),
                                     "roc_year": None,
                                     "salary": float(manual_salary),
                                     "bonus": float(manual_bonus),
                                     "welfare": float(manual_welfare),
                                     "total_income": float(manual_total),
-                                    "note": f"manual_main;{manual_note.strip()}",
+                                    "note": append_note_parts([
+                                        "manual_main",
+                                        f"date:{manual_date.isoformat()}",
+                                        f"勞健退:{float(manual_labor)}",
+                                        f"三節:{float(manual_festival)}",
+                                        f"餐費:{float(manual_meal)}",
+                                        manual_note.strip(),
+                                    ]),
                                 }],
                             )
                             st.success("已新增總表資料。")
                             st.rerun()
                 with add_tabs[1]:
-                    with st.form("manual_add_income_form", clear_on_submit=True):
-                        c1, c2, c3 = st.columns(3)
+                    with st.form("manual_add_person_form", clear_on_submit=True):
+                        c1, c2, c3, c4 = st.columns(4)
                         with c1:
-                            income_sheet = st.text_input("分表名稱", value="得意佳", key="add_income_sheet")
+                            person_company = st.selectbox("公司名", COMPANY_OPTIONS, key="add_person_company")
                         with c2:
-                            income_name = st.text_input("姓名", key="add_income_name")
+                            income_name = st.text_input("姓名", key="add_person_name")
                         with c3:
-                            income_project = st.text_input("案場", key="add_income_project")
-                        c4, c5, c6 = st.columns(3)
+                            person_projects = get_project_options(df_all, person_company)
+                            income_project_select = st.selectbox(
+                                "案名",
+                                (person_projects + ["自訂輸入"]) if person_projects else ["自訂輸入"],
+                                key="add_person_project_select",
+                            )
                         with c4:
-                            income_total = st.number_input("總金額", min_value=0.0, step=1000.0, format="%.0f", key="add_income_total")
+                            person_date = st.date_input("日期", key="add_person_date")
+                        if income_project_select == "自訂輸入":
+                            income_project = st.text_input("自訂案名", key="add_person_project_custom")
+                        else:
+                            income_project = income_project_select
+
+                        c5, c6, c7 = st.columns(3)
                         with c5:
-                            income_tax = st.number_input("所得稅", min_value=0.0, step=100.0, format="%.0f", key="add_income_tax")
+                            income_total = st.number_input("總金額", min_value=0.0, step=1000.0, format="%.0f", key="add_income_total")
                         with c6:
-                            income_health = st.number_input("二代健保", min_value=0.0, step=100.0, format="%.0f", key="add_income_health")
-                        c7, c8, c9 = st.columns(3)
+                            auto_calc_income = st.checkbox("自動帶入所得稅/二代/實領", value=True, key="add_income_auto")
                         with c7:
-                            income_net = st.number_input("實領", min_value=0.0, step=1000.0, format="%.0f", key="add_income_net")
-                        with c8:
+                            sync_yearly = st.checkbox("同步寫入在職年統計", value=True, key="add_sync_yearly")
+
+                        calc_tax = round(float(income_total) * 0.05, 0)
+                        calc_health = round(float(income_total) * 0.0211, 0)
+                        calc_net = round(float(income_total) - calc_tax - calc_health, 0)
+
+                        c8, c9, c10 = st.columns(3)
+                        if auto_calc_income:
+                            with c8:
+                                st.text_input("所得稅", value=f"{calc_tax:,.0f}", disabled=True, key="add_income_tax_preview")
+                            with c9:
+                                st.text_input("二代健保", value=f"{calc_health:,.0f}", disabled=True, key="add_income_health_preview")
+                            with c10:
+                                st.text_input("實領", value=f"{calc_net:,.0f}", disabled=True, key="add_income_net_preview")
+                            income_tax = calc_tax
+                            income_health = calc_health
+                            income_net = calc_net
+                        else:
+                            with c8:
+                                income_tax = st.number_input("所得稅", min_value=0.0, step=100.0, format="%.0f", key="add_income_tax")
+                            with c9:
+                                income_health = st.number_input("二代健保", min_value=0.0, step=100.0, format="%.0f", key="add_income_health")
+                            with c10:
+                                income_net = st.number_input("實領", min_value=0.0, step=1000.0, format="%.0f", key="add_income_net")
+
+                        c11, c12, c13 = st.columns(3)
+                        with c11:
                             income_wtax = st.number_input("應扣所得", min_value=0.0, step=100.0, format="%.0f", key="add_income_wtax")
-                        with c9:
+                        with c12:
                             income_whealth = st.number_input("應扣二代", min_value=0.0, step=100.0, format="%.0f", key="add_income_whealth")
-                        submit_income = st.form_submit_button("新增個人所得資料")
-                    if submit_income:
-                        if not income_sheet.strip() or not income_name.strip() or not income_project.strip():
-                            st.error("請輸入分表名稱、姓名與案場。")
+                        with c13:
+                            yearly_year = st.text_input("在職年年份", value="114", key="add_yearly_year")
+                        c14, c15 = st.columns(2)
+                        with c14:
+                            yearly_amount = st.number_input("在職年金額", min_value=0.0, step=1000.0, format="%.0f", key="add_yearly_amount")
+                        with c15:
+                            person_note = st.text_input("備註（可空白）", key="add_person_note")
+
+                        submit_person = st.form_submit_button("新增個人資料")
+                    if submit_person:
+                        if not income_name.strip() or not str(income_project).strip():
+                            st.error("請輸入姓名與案名。")
                         else:
                             save_import_records(
                                 "個人所得手動",
                                 "manual_input_income",
                                 [{
-                                    "sheet_name": income_sheet.strip(),
+                                    "sheet_name": person_company,
                                     "employee_name": income_name.strip(),
-                                    "company_name": income_sheet.strip(),
-                                    "project_name": income_project.strip(),
+                                    "company_name": person_company,
+                                    "project_name": str(income_project).strip(),
                                     "roc_year": 114,
                                     "salary": float(income_total),
                                     "bonus": float(income_tax),
                                     "welfare": float(income_health),
                                     "total_income": float(income_net),
-                                    "note": f"應扣所得:{float(income_wtax)}, 應扣二代:{float(income_whealth)}",
+                                    "note": append_note_parts([
+                                        f"date:{person_date.isoformat()}",
+                                        f"應扣所得:{float(income_wtax)}",
+                                        f"應扣二代:{float(income_whealth)}",
+                                        person_note.strip(),
+                                    ]),
                                 }],
                             )
-                            st.success("已新增個人所得資料。")
-                            st.rerun()
-                with add_tabs[2]:
-                    with st.form("manual_add_bonus_form", clear_on_submit=True):
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            bonus_name = st.text_input("姓名", key="add_bonus_name")
-                        with c2:
-                            bonus_note = st.text_input("備註（可空白）", key="add_bonus_note")
-                        c3, c4 = st.columns(2)
-                        with c3:
-                            bonus_year = st.text_input("年份（民國）", value="114", key="add_bonus_year")
-                        with c4:
-                            bonus_amount = st.number_input("金額", step=1000.0, format="%.0f", key="add_bonus_amount")
-                        submit_bonus = st.form_submit_button("新增在職年統計資料")
-                    if submit_bonus:
-                        if not bonus_name.strip():
-                            st.error("請輸入姓名。")
-                        elif not bonus_year.strip():
-                            st.error("請填寫年份。")
-                        else:
-                            save_import_records(
-                                "在職年手動",
-                                "manual_input_bonus",
-                                [{
-                                    "sheet_name": "在職年統計",
-                                    "employee_name": bonus_name.strip(),
-                                    "company_name": None,
-                                    "project_name": None,
-                                    "roc_year": 114,
-                                    "salary": 0.0,
-                                    "bonus": float(bonus_amount),
-                                    "welfare": 0.0,
-                                    "total_income": float(bonus_amount),
-                                    "note": f"{bonus_year.strip()}:{float(bonus_amount)};{bonus_note.strip()}",
-                                }],
-                            )
-                            st.success("已新增在職年統計資料。")
+                            if sync_yearly and yearly_year.strip():
+                                annual_amount = float(yearly_amount) if yearly_amount else float(income_total)
+                                save_import_records(
+                                    "在職年手動",
+                                    "manual_input_bonus",
+                                    [{
+                                        "sheet_name": "在職年統計",
+                                        "employee_name": income_name.strip(),
+                                        "company_name": person_company,
+                                        "project_name": str(income_project).strip(),
+                                        "roc_year": 114,
+                                        "salary": 0.0,
+                                        "bonus": annual_amount,
+                                        "welfare": 0.0,
+                                        "total_income": annual_amount,
+                                        "note": append_note_parts([
+                                            f"date:{person_date.isoformat()}",
+                                            f"{yearly_year.strip()}:{annual_amount}",
+                                            person_note.strip(),
+                                        ]),
+                                    }],
+                                )
+                            st.success("已新增個人資料。")
                             st.rerun()
 
                 st.markdown("#### 從原始檔自動帶入六分表")
