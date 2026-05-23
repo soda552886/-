@@ -1,58 +1,51 @@
-# 薪資報表匯入管理系統（Streamlit + SQLite）
+# 人事成本管理系統（Streamlit + SQLite）
 
-這是一個依照既有 Excel 結構重寫的系統，專門匯入薪資占比、薪資獎金統計、個人所得三種檔案，資料儲存在本機 SQLite。
+依「人事成本系統.xlsx」範本設計，包含四個分頁：**全案總表**、**人事成本**、**在職年統計**、**個人所得**。
 
 ## 功能
 
-- 專用匯入：`薪資占比1150131.xlsx`
-- 專用匯入：`114薪資獎金統計表1150131(更.xlsx`
-- 專用匯入：`114年_個人所得.xlsx`
-- 匯入批次紀錄管理
-- 依姓名/公司/案場/來源/年度查詢
+- 匯入 `人事成本系統.xlsx`（全案總表 + 人事成本）
+- 報表呈現四種樣式，可篩選年度、隱藏欄位
+- 手動新增（全案總表逐項、人事成本逐項）
+- 在職年統計、個人所得由人事成本自動計算
+- 資料查詢、批次紀錄、資料庫備份還原
 
 ## 專案檔案
 
-- `app.py`：Streamlit 主程式（含三種檔案解析器）
-- `database.py`：SQLite 建表與匯入/查詢函式
+- `app.py`：Streamlit 主程式
+- `hr_system_core.py`：範本欄位解析與報表組裝
+- `database.py`：SQLite 建表與 CRUD
 - `requirements.txt`：套件清單
-- `financial_reports.db`：執行後自動建立的 SQLite 資料庫
 
 ## 如何執行
 
-1. 安裝套件
-
 ```bash
 pip install -r requirements.txt
-```
-
-2. 啟動系統
-
-```bash
 streamlit run app.py
 ```
 
-3. 在瀏覽器開啟畫面（通常是 `http://localhost:8501`）
+瀏覽器開啟 `http://localhost:8501`。
+
+## 使用步驟
+
+1. **匯入資料**：上傳 `人事成本系統.xlsx`（與 Downloads 裡的範本相同結構）
+2. **舊版資料**：若先前用舊系統存過資料，到「匯入資料」→「舊版網站資料匯入」按 **一鍵轉換**
+3. **報表呈現**：選擇全案總表 / 人事成本 / 在職年統計 / 個人所得
+4. **手動新增**：依範本下方說明補登資料
+
+### 雲端舊資料怎麼搬
+
+1. 在 Render 網站「匯入紀錄」→ **下載資料庫備份 (.db)**
+2. 本機啟動系統 → 「匯入紀錄」→ **上傳備份還原**
+3. 「匯入資料」→ **一鍵轉換舊資料到新格式**
+4. 再 **下載備份** 上傳回 Render 還原（或直接在雲端轉換）
 
 ## 雲端部署（Render）
 
-專案已包含 `render.yaml`，可直接部署。
-
-1. 將專案推到 GitHub
-2. 在 Render 建立 Web Service，選取此 repo
-3. Render 會自動讀取 `render.yaml` 完成：
-   - 安裝 `requirements.txt`
-   - 啟動 `streamlit run app.py --server.address 0.0.0.0 --server.port $PORT`
-   - 掛載持久化磁碟（SQLite 不會因重啟遺失）
-4. 部署完成後使用 Render 提供的網址開啟
+1. 推到 GitHub
+2. Render 建立 Web Service 並選此 repo
+3. `render.yaml` 會自動安裝依賴、掛載 `/var/data` 持久化 SQLite
 
 ### 資料庫路徑
 
-- 預設使用環境變數 `DB_PATH`
-- 雲端建議設為持久化路徑（Render 已在 `render.yaml` 設定 `/var/data/financial_reports.db`）
-
-## 後續可擴充方向
-
-- 匯入模板版本控管（不同月份格式）
-- 同人員跨檔案自動比對整併
-- 每月趨勢圖與異常提醒
-- 權限管理與操作歷程
+- 環境變數 `DB_PATH`（Render 預設 `/var/data/financial_reports.db`）
