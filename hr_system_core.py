@@ -47,7 +47,28 @@ YEARLY_STAT_COLS = ["姓名", "113年", "114年", "115年", "總計"]
 PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
 
 CASE_NOTE_KEYS = ["總銷", "簽約金額", "銷售請款額", "請款額1%", "請款淨額", "營收", "營收(未進帳)"]
+CASE_OVERWRITE_FIELDS = {"總銷"}
+CASE_DELTA_FIELDS = {"營收(未進帳)"}
 HR_NOTE_KEYS = ["勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "所得稅", "執行業務所得"]
+HR_COST_SUM_KEYS = ["勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利"]
+HR_IMPORT_DISPLAY_COLS = [
+    "年度",
+    "案名",
+    "姓名",
+    "日期",
+    "項目",
+    "金額",
+    "勞保",
+    "勞退",
+    "保費",
+    "金額",
+    "稅款",
+    "金額",
+    "獎項",
+    "次數",
+    "備註",
+]
+HR_DETAIL_SHEET_NAMES = ["檔案匯入資料", "人事成本匯入", "人事成本明細"]
 
 LEGACY_CASE_SOURCES = {"薪資占比", "總表主表手動", "總表主表調整"}
 LEGACY_HR_SOURCES = {"個人所得", "個人所得手動", "薪資獎金統計", "在職年手動", "在職年調整"}
@@ -394,6 +415,270 @@ def hr_row_total(note: object) -> float:
     return sum(parse_note_number(note, k) for k in HR_NOTE_KEYS)
 
 
+def hr_cost_sum_from_note(note: object) -> float:
+    return sum(parse_note_number(note, k) for k in HR_COST_SUM_KEYS)
+
+
+def parse_roc_date_text(value: object) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    if re.match(r"\d{4}-\d{2}-\d{2}", text):
+        return text
+    m = re.match(r"(\d{2,3})[/\-](\d{1,2})[/\-](\d{1,2})", text)
+    if m:
+        roc = int(m.group(1))
+        if roc < 1911:
+            roc += 1911
+        return f"{roc:04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    try:
+        ts = pd.to_datetime(value, errors="coerce")
+        if pd.notna(ts):
+            return ts.date().isoformat()
+    except Exception:
+        pass
+    return text
+
+
+def _clean_import_col(name: object) -> str:
+    return clean_text(name).replace("\n", "")
+
+
+def _rename_hr_import_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    raw = [_clean_import_col(c) for c in out.columns]
+    new_cols: list[str] = []
+    amount_idx = 0
+    for i, col in enumerate(raw):
+        if not col:
+            new_cols.append(f"欄位{i + 1}")
+            continue
+        if col == "金額" or re.match(r"^金額\.\d+$", col):
+            labels = ["項目金額", "保費金額", "稅款金額"]
+            new_cols.append(labels[amount_idx] if amount_idx < len(labels) else f"金額{amount_idx + 1}")
+            amount_idx += 1
+        else:
+            new_cols.append(col)
+    out.columns = new_cols
+    if "案場" in out.columns and "案名" not in out.columns:
+        out = out.rename(columns={"案場": "案名"})
+    return out
+
+
+def is_hr_detail_import_df(df: pd.DataFrame) -> bool:
+    if df.empty:
+        return False
+    renamed = _rename_hr_import_columns(df)
+    cols = set(renamed.columns)
+    return "姓名" in cols and "項目" in cols and ("案名" in cols or "案場" in cols)
+
+
+def build_hr_cost_record(
+    *,
+    roc_year: int,
+    project_name: str,
+    employee_name: str,
+    date_text: str,
+    item: str,
+    item_amount: float,
+    labor: float,
+    pension: float,
+    insurance_type: str,
+    insurance_amount: float,
+    tax_type: str,
+    tax_amount: float,
+    bonus_type: str,
+    times: str,
+    remark: str,
+) -> dict:
+    item_amounts = {name: 0.0 for name in HR_MANUAL_ITEM_OPTIONS}
+    if item in item_amounts:
+        item_amounts[item] = float(item_amount or 0)
+
+    health = float(insurance_amount or 0) if insurance_type == "健保" else 0.0
+    nhi2 = float(insurance_amount or 0) if insurance_type == "二代" else 0.0
+    income_tax = float(tax_amount or 0) if tax_type == "所得稅" else 0.0
+    business = float(tax_amount or 0) if tax_type == "執行業務所得" else 0.0
+
+    note_parts = [
+        f"date:{date_text}" if date_text else "",
+        f"勞保:{float(labor or 0)}",
+        f"勞退:{float(pension or 0)}",
+        f"健保:{health}",
+        f"二代:{nhi2}",
+        f"所得稅:{income_tax}",
+        f"執行業務所得:{business}",
+        f"薪資:{item_amounts['薪資']}",
+        f"三節:{item_amounts['三節']}",
+        f"獎金:{item_amounts['獎金']}",
+        f"員工福利:{item_amounts['員工福利']}",
+        f"次數:{times or '1'}",
+    ]
+    if bonus_type.strip():
+        note_parts.append(f"獎項:{bonus_type.strip()}")
+    if remark.strip():
+        note_parts.append(remark.strip())
+    note = append_note_parts(note_parts)
+    total = hr_cost_sum_from_note(note)
+    return {
+        "sheet_name": "人事成本",
+        "employee_name": employee_name,
+        "company_name": None,
+        "project_name": project_name,
+        "roc_year": roc_year,
+        "salary": item_amounts["薪資"],
+        "bonus": item_amounts["獎金"],
+        "welfare": item_amounts["員工福利"],
+        "total_income": total,
+        "note": note,
+    }
+
+
+def _hr_detail_row_to_record(row: pd.Series) -> dict | None:
+    year = roc_year_from_value(row.get("年度"))
+    project = clean_text(row.get("案名"))
+    name = clean_text(row.get("姓名"))
+    if year is None or not project:
+        return None
+    if _is_instruction_row(row.get("年度"), project, name, row.get("項目")):
+        return None
+
+    item = clean_text(row.get("項目"))
+    item_amount = to_number(row.get("項目金額"))
+    labor = to_number(row.get("勞保"))
+    pension = to_number(row.get("勞退"))
+    insurance_type = clean_text(row.get("保費"))
+    insurance_amount = to_number(row.get("保費金額"))
+    tax_type = clean_text(row.get("稅款"))
+    tax_amount = to_number(row.get("稅款金額"))
+    bonus_type = clean_text(row.get("獎項"))
+    times = clean_text(row.get("次數")) or "1"
+    remark = clean_text(row.get("備註"))
+    date_text = parse_roc_date_text(row.get("日期"))
+
+    if not name and not any(
+        [
+            item_amount,
+            labor,
+            pension,
+            insurance_amount,
+            tax_amount,
+            item,
+        ]
+    ):
+        return None
+
+    return build_hr_cost_record(
+        roc_year=year,
+        project_name=project,
+        employee_name=name or "未命名",
+        date_text=date_text,
+        item=item,
+        item_amount=item_amount,
+        labor=labor,
+        pension=pension,
+        insurance_type=insurance_type,
+        insurance_amount=insurance_amount,
+        tax_type=tax_type,
+        tax_amount=tax_amount,
+        bonus_type=bonus_type,
+        times=times,
+        remark=remark,
+    )
+
+
+def parse_hr_detail_dataframe(df: pd.DataFrame) -> tuple[list[dict], pd.DataFrame]:
+    renamed = _rename_hr_import_columns(df)
+    records: list[dict] = []
+    preview_rows: list[dict] = []
+    for _, row in renamed.iterrows():
+        record = _hr_detail_row_to_record(row)
+        if record is None:
+            continue
+        records.append(record)
+        preview_rows.append(
+            {
+                "年度": record["roc_year"],
+                "案名": record["project_name"],
+                "姓名": record["employee_name"],
+                "日期": parse_note_value(record["note"], "date") or parse_roc_date_text(row.get("日期")),
+                "項目": clean_text(row.get("項目")),
+                "項目金額": to_number(row.get("項目金額")),
+                "勞保": parse_note_number(record["note"], "勞保"),
+                "勞退": parse_note_number(record["note"], "勞退"),
+                "保費": clean_text(row.get("保費")),
+                "保費金額": to_number(row.get("保費金額")),
+                "稅款": clean_text(row.get("稅款")),
+                "稅款金額": to_number(row.get("稅款金額")),
+                "獎項": parse_note_value(record["note"], "獎項"),
+                "次數": parse_note_value(record["note"], "次數"),
+                "備註": clean_text(row.get("備註")),
+            }
+        )
+    preview = pd.DataFrame(preview_rows)
+    return records, preview
+
+
+def _read_import_sheets(file_bytes: bytes, filename: str = "") -> list[tuple[str, pd.DataFrame]]:
+    name = (filename or "").lower()
+    if name.endswith(".csv"):
+        df = pd.read_csv(BytesIO(file_bytes), encoding="utf-8-sig")
+        return [("csv", df)]
+    xls = pd.ExcelFile(BytesIO(file_bytes))
+    sheets: list[tuple[str, pd.DataFrame]] = []
+    for sheet_name in xls.sheet_names:
+        df = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name, header=0)
+        sheets.append((sheet_name, df))
+    return sheets
+
+
+def parse_hr_detail_workbook(file_bytes: bytes, filename: str = "") -> tuple[list[dict], pd.DataFrame]:
+    sheets = _read_import_sheets(file_bytes, filename)
+    candidates: list[tuple[int, int, str, pd.DataFrame]] = []
+    for idx, (sheet_name, df) in enumerate(sheets):
+        if sheet_name in HR_DETAIL_SHEET_NAMES or is_hr_detail_import_df(df):
+            priority = 0 if sheet_name in HR_DETAIL_SHEET_NAMES else 1
+            candidates.append((priority, idx, sheet_name, df))
+    candidates.sort()
+    for _, _, _sheet_name, df in candidates:
+        records, preview = parse_hr_detail_dataframe(df)
+        if records:
+            return records, preview
+    return [], pd.DataFrame()
+
+
+def build_hr_import_template_bytes() -> bytes:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "檔案匯入資料"
+    ws.append(HR_IMPORT_DISPLAY_COLS)
+    ws.append(
+        [
+            "114",
+            "天水一墅",
+            "範例姓名",
+            "115/05/10",
+            "薪資",
+            50000,
+            1000,
+            200,
+            "健保",
+            500,
+            "所得稅",
+            0,
+            "個獎",
+            "1",
+            "",
+        ]
+    )
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
 def _is_instruction_row(*cells: object) -> bool:
     joined = " ".join(clean_text(c) for c in cells)
     return any(x in joined for x in ["資料條件", "手動新增", "需求", "項目", "(總計)"])
@@ -463,34 +748,44 @@ def parse_hr_system_workbook(file_bytes: bytes) -> dict[str, List[dict]]:
                 }
             )
 
+    for sheet_name in HR_DETAIL_SHEET_NAMES:
+        if sheet_name in xls.sheet_names:
+            df = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name, header=0)
+            detail_records, _ = parse_hr_detail_dataframe(df)
+            result["人事成本"].extend(detail_records)
+
     if "人事成本" in xls.sheet_names:
         df = pd.read_excel(BytesIO(file_bytes), sheet_name="人事成本", header=0)
-        df.columns = [clean_text(c).replace("\n", "") for c in df.columns]
-        for _, row in df.iterrows():
-            year = roc_year_from_value(row.get("年度"))
-            project = clean_text(row.get("案場"))
-            if year is None or not project:
-                continue
-            if _is_instruction_row(row.get("年度"), project):
-                continue
-            note = _hr_note_from_row(row)
-            total = to_number(row.get("總計"))
-            if total <= 0:
-                total = hr_row_total(note)
-            result["人事成本"].append(
-                {
-                    "sheet_name": "人事成本",
-                    "employee_name": clean_text(row.get("姓名")) or None,
-                    "company_name": None,
-                    "project_name": project,
-                    "roc_year": year,
-                    "salary": parse_note_number(note, "薪資"),
-                    "bonus": parse_note_number(note, "獎金"),
-                    "welfare": parse_note_number(note, "員工福利"),
-                    "total_income": total,
-                    "note": note,
-                }
-            )
+        if is_hr_detail_import_df(df):
+            detail_records, _ = parse_hr_detail_dataframe(df)
+            result["人事成本"].extend(detail_records)
+        else:
+            df.columns = [clean_text(c).replace("\n", "") for c in df.columns]
+            for _, row in df.iterrows():
+                year = roc_year_from_value(row.get("年度"))
+                project = clean_text(row.get("案場"))
+                if year is None or not project:
+                    continue
+                if _is_instruction_row(row.get("年度"), project):
+                    continue
+                note = _hr_note_from_row(row)
+                total = to_number(row.get("總計"))
+                if total <= 0:
+                    total = hr_cost_sum_from_note(note)
+                result["人事成本"].append(
+                    {
+                        "sheet_name": "人事成本",
+                        "employee_name": clean_text(row.get("姓名")) or None,
+                        "company_name": None,
+                        "project_name": project,
+                        "roc_year": year,
+                        "salary": parse_note_number(note, "薪資"),
+                        "bonus": parse_note_number(note, "獎金"),
+                        "welfare": parse_note_number(note, "員工福利"),
+                        "total_income": total,
+                        "note": note,
+                    }
+                )
 
     return result
 
@@ -501,11 +796,32 @@ def _filter_sources(df_all: pd.DataFrame, names: list[str]) -> pd.DataFrame:
     return df_all[df_all["source_type"].isin(names)].copy()
 
 
-def _merge_notes_to_row(note_series: pd.Series) -> dict[str, float]:
-    merged: dict[str, float] = {}
+def _merge_case_notes(note_series: pd.Series) -> dict[str, float]:
+    summed = {key: 0.0 for key in CASE_NOTE_KEYS}
+    overwrite: dict[str, float] = {}
+    extras = {"人事成本": 0.0, "比例": 0.0}
+
     for note in note_series:
-        for key in CASE_NOTE_KEYS + HR_NOTE_KEYS + ["人事成本", "比例"]:
-            merged[key] = merged.get(key, 0.0) + parse_note_number(note, key)
+        text = "" if pd.isna(note) else str(note)
+        field = parse_note_value(text, "field")
+        mode = parse_note_value(text, "mode")
+
+        for key in CASE_NOTE_KEYS:
+            val = parse_note_number(text, key)
+            if val == 0 and field and field != key:
+                continue
+            if key in CASE_OVERWRITE_FIELDS or (mode == "overwrite" and (not field or field == key)):
+                overwrite[key] = val
+            else:
+                summed[key] += val
+
+        for key in ["人事成本", "比例"]:
+            extras[key] += parse_note_number(text, key)
+
+    merged = {**summed, **overwrite}
+    for key, val in extras.items():
+        if val != 0:
+            merged[key] = merged.get(key, 0.0) + val
     return merged
 
 
@@ -534,9 +850,10 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
             continue
         if filter_year is not None and yr != filter_year:
             continue
-        merged = _merge_notes_to_row(grp["note"])
+        grp_sorted = grp.sort_values("id") if "id" in grp.columns else grp
+        merged = _merge_case_notes(grp_sorted["note"])
         if merged.get("總銷", 0) == 0:
-            merged["總銷"] = parse_note_number(";".join(grp["note"].astype(str)), "全案總銷")
+            merged["總銷"] = parse_note_number(";".join(grp_sorted["note"].astype(str)), "全案總銷")
         sales_request = merged.get("銷售請款額", 0.0)
         request_pct = merged.get("請款額1%", 0.0)
         if request_pct == 0 and sales_request > 0:
@@ -567,7 +884,19 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
     if not rows:
         return pd.DataFrame(columns=CASE_TOTAL_COLS)
     out = pd.DataFrame(rows)
-    return out.groupby(["年度", "公司名", "案場"], as_index=False).sum(numeric_only=True)[CASE_TOTAL_COLS]
+    grouped = out.groupby(["年度", "公司名", "案場"], as_index=False).sum(numeric_only=True)
+    for col in CASE_OVERWRITE_FIELDS:
+        if col not in grouped.columns:
+            continue
+        last_vals = out.groupby(["年度", "公司名", "案場"], as_index=False)[col].last()
+        grouped[col] = last_vals[col].values
+    grouped["比例"] = grouped.apply(
+        lambda r: calc_hr_ratio(float(r.get("人事成本") or 0), float(r.get("請款額1%") or 0))
+        if float(r.get("請款額1%") or 0) > 0
+        else float(r.get("比例") or 0),
+        axis=1,
+    )
+    return grouped[CASE_TOTAL_COLS]
 
 
 def build_hr_cost_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:

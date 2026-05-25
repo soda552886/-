@@ -12,6 +12,7 @@ from openpyxl.utils import get_column_letter
 
 from database import (
     DB_PATH,
+    clear_all_data,
     delete_payroll_records,
     delete_records_by_source,
     init_db,
@@ -22,7 +23,9 @@ from database import (
 )
 from hr_system_core import (
     BONUS_TYPE_OPTIONS,
+    CASE_DELTA_FIELDS,
     CASE_FIELD_OPTIONS,
+    CASE_OVERWRITE_FIELDS,
     CASE_TOTAL_COLS,
     COMPANY_OPTIONS,
     HR_COST_COLS,
@@ -41,19 +44,27 @@ from hr_system_core import (
     calc_request_pct,
     list_legacy_source_counts,
     migrate_all_legacy_records,
+    build_hr_import_template_bytes,
+    parse_hr_detail_workbook,
     parse_hr_system_workbook,
     parse_note_number,
     roc_year_from_value,
 )
 
 
-def format_currency_df(df: pd.DataFrame, cols: List[str]) -> pd.io.formats.style.Styler:
+def format_currency_df(
+    df: pd.DataFrame,
+    cols: List[str],
+    percent_cols: List[str] | None = None,
+) -> pd.io.formats.style.Styler:
+    percent_cols = percent_cols or []
     numeric_cols = [
         c
         for c in cols
         if c in df.columns and pd.api.types.is_numeric_dtype(pd.to_numeric(df[c], errors="coerce"))
     ]
-    fmt = {c: "{:,.0f}" for c in numeric_cols}
+    fmt = {c: "{:,.0f}" for c in numeric_cols if c not in percent_cols}
+    fmt.update({c: "{:.2f}%" for c in numeric_cols if c in percent_cols})
 
     def highlight_total_row(row: pd.Series) -> List[str]:
         is_total = str(row.iloc[0]).strip() == "合計"
@@ -125,7 +136,7 @@ def apply_sheet_style(ws, numeric_cols: List[str], title: str, column_fill_map: 
                     cell.fill = PatternFill("solid", fgColor=column_fill_map[header])
             header = str(ws.cell(row=2, column=c).value or "")
             if header in numeric_cols:
-                cell.number_format = "#,##0"
+                cell.number_format = '0.00"%"' if header == "比例" else "#,##0"
                 cell.alignment = Alignment(horizontal="right", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="left", vertical="center")
@@ -740,8 +751,66 @@ tab_import, tab_report, tab_manual, tab_query, tab_batches = st.tabs(
 )
 
 with tab_import:
-    st.subheader("人事成本系統.xlsx")
-    st.caption("請使用範本檔（含全案總表、人事成本、在職年統計、個人所得四個分頁）。")
+    st.subheader("檔案匯入（人事成本明細）")
+    st.caption(
+        "上傳 Excel / CSV，欄位：年度、案名、姓名、日期、項目、金額、勞保、勞退、"
+        "保費、金額、稅款、金額、獎項、次數、備註（與手動新增同一筆可同時填寫各區塊）。"
+    )
+    col_tpl, col_hint = st.columns([1, 2])
+    with col_tpl:
+        st.download_button(
+            "下載空白範本",
+            data=build_hr_import_template_bytes(),
+            file_name="人事成本_檔案匯入範本.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_hr_import_template",
+        )
+    with col_hint:
+        st.info("項目＝薪資/三節/獎金/員工福利；保費＝健保/二代；稅款＝所得稅/執行業務所得。")
+
+    detail_file = st.file_uploader(
+        "上傳匯入檔",
+        type=["xlsx", "xls", "csv"],
+        key="upload_hr_detail",
+    )
+    replace_hr_only = st.checkbox("匯入前刪除舊的「人事成本」資料", value=False, key="replace_hr_detail")
+    if detail_file is not None:
+        try:
+            detail_records, detail_preview = parse_hr_detail_workbook(detail_file.getvalue(), detail_file.name)
+            st.session_state["hr_detail_import_records"] = detail_records
+            st.session_state["hr_detail_import_preview"] = detail_preview
+            st.session_state["hr_detail_import_filename"] = detail_file.name
+        except Exception as exc:
+            st.error(f"讀檔失敗：{exc}")
+            st.session_state.pop("hr_detail_import_records", None)
+
+    preview_df = st.session_state.get("hr_detail_import_preview")
+    detail_records = st.session_state.get("hr_detail_import_records", [])
+    if preview_df is not None and not (isinstance(preview_df, pd.DataFrame) and preview_df.empty):
+        st.markdown("### 檔案匯入資料")
+        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+        st.caption(f"共 {len(detail_records)} 筆可匯入。")
+    elif detail_file is not None and not detail_records:
+        st.warning("檔案中沒有可匯入的資料列，請確認欄位與範本一致。")
+
+    if detail_records and st.button("確認匯入", type="primary", key="confirm_hr_detail_import"):
+        try:
+            if replace_hr_only:
+                deleted = delete_records_by_source("人事成本")
+                st.info(f"已先刪除舊人事成本 {deleted} 筆。")
+            batch_name = st.session_state.get("hr_detail_import_filename", "hr_detail_import")
+            total = save_import_records("人事成本", batch_name, detail_records)
+            st.success(f"匯入成功，共 {total} 筆人事成本。")
+            st.info("在職年統計、個人所得會依人事成本資料自動計算顯示。")
+            for key in ("hr_detail_import_records", "hr_detail_import_preview", "hr_detail_import_filename"):
+                st.session_state.pop(key, None)
+            st.rerun()
+        except Exception as exc:
+            st.error(f"匯入失敗：{exc}")
+
+    st.divider()
+    st.subheader("人事成本系統.xlsx（整份範本）")
+    st.caption("請使用範本檔（含全案總表、人事成本等分頁）；若含「檔案匯入資料」分頁也會一併匯入。")
     hr_file = st.file_uploader("上傳人事成本系統檔", type=["xlsx", "xls"], key="upload_hr_system")
     replace_all = st.checkbox("匯入前刪除舊的「全案總表」與「人事成本」資料", value=True, key="replace_hr_system")
     if hr_file is not None and st.button("匯入人事成本系統", key="import_hr_system"):
@@ -808,7 +877,16 @@ with tab_report:
         filter_year = None if fy == "全部" else int(fy)
         report_view = st.selectbox("選擇報表", ["全案總表", "人事成本", "在職年統計", "個人所得"], key="report_view")
 
-        def show_report_table(df: pd.DataFrame, cols: list[str], numeric_cols: list[str], title: str, file_name: str, key: str) -> None:
+        def show_report_table(
+            df: pd.DataFrame,
+            cols: list[str],
+            numeric_cols: list[str],
+            title: str,
+            file_name: str,
+            key: str,
+            percent_cols: list[str] | None = None,
+        ) -> None:
+            percent_cols = percent_cols or []
             if df.empty:
                 st.warning(f"尚無「{title}」資料。")
                 return
@@ -818,7 +896,12 @@ with tab_report:
             display_df = df[shown].copy()
             for c in num_cols:
                 display_df[c] = pd.to_numeric(display_df[c], errors="coerce").fillna(0.0)
-            total_kwargs: dict = {c: float(display_df[c].sum()) for c in num_cols}
+            sum_cols = [c for c in num_cols if c not in percent_cols]
+            total_kwargs: dict = {c: float(display_df[c].sum()) for c in sum_cols}
+            if "比例" in percent_cols and "人事成本" in display_df.columns and "請款額1%" in display_df.columns:
+                hr_sum = float(display_df["人事成本"].sum())
+                req_sum = float(display_df["請款額1%"].sum())
+                total_kwargs["比例"] = calc_hr_ratio(hr_sum, req_sum) if req_sum > 0 else 0.0
             text_cols = [c for c in shown if c not in num_cols]
             if text_cols:
                 total_kwargs[text_cols[0]] = "合計"
@@ -826,7 +909,7 @@ with tab_report:
                     total_kwargs[c] = ""
             display_df = pd.concat([display_df, pd.DataFrame([total_kwargs])], ignore_index=True)
             st.dataframe(
-                format_currency_df(display_df, num_cols),
+                format_currency_df(display_df, num_cols, percent_cols=percent_cols),
                 use_container_width=True,
                 hide_index=True,
             )
@@ -847,8 +930,9 @@ with tab_report:
                 "全案總表",
                 "全案總表_匯出.xlsx",
                 "case_total",
+                percent_cols=["比例"],
             )
-            st.caption("人事成本欄位由「人事成本」分頁加總帶入；比例 = 人事成本 ÷ 請款額1% × 100%。")
+            st.caption("人事成本由人事成本分頁帶入；比例(%) = 人事成本 ÷ 請款額1% × 100。")
         elif report_view == "人事成本":
             hr_df = build_hr_cost_frame(df_all, filter_year)
             show_report_table(
@@ -898,18 +982,45 @@ with tab_manual:
                 case_project = st.selectbox("案名", PROJECT_OPTIONS, key="m_case_project")
             with c4:
                 case_date = st.date_input("日期", key="m_case_date")
-            c5, c6 = st.columns(2)
+            c5, c6, c7 = st.columns(3)
             with c5:
                 case_field = st.selectbox("項目", CASE_FIELD_OPTIONS, key="m_case_field")
             with c6:
                 case_amount = st.number_input("金額", min_value=0.0, step=1000.0, format="%.0f", key="m_case_amount")
+            with c7:
+                if case_field in CASE_DELTA_FIELDS:
+                    case_op = st.radio("操作", ["增加", "扣除（入帳）"], horizontal=True, key="m_case_op")
+                else:
+                    case_op = "增加"
+            if case_field == "總銷":
+                st.caption("總銷採覆蓋：新金額會取代舊值，不會累加。")
+            elif case_field in CASE_DELTA_FIELDS:
+                st.caption("營收(未進帳)可累加；選「扣除」代表入帳後減少未進帳金額。")
             if case_field == "銷售請款額" and case_amount > 0:
                 st.info(f"請款額1% 自動帶入：{calc_request_pct(case_amount):,.0f}")
             submit_case = st.form_submit_button("新增全案總表資料")
         if submit_case:
-            note_parts = [f"date:{case_date.isoformat()}", f"{case_field}:{float(case_amount)}"]
+            signed_amount = float(case_amount)
+            if case_field in CASE_DELTA_FIELDS and case_op.startswith("扣除"):
+                signed_amount = -abs(signed_amount)
+            if case_field in CASE_OVERWRITE_FIELDS:
+                note_parts = [
+                    f"date:{case_date.isoformat()}",
+                    "mode:overwrite",
+                    f"field:{case_field}",
+                    f"{case_field}:{signed_amount}",
+                ]
+            elif case_field in CASE_DELTA_FIELDS:
+                note_parts = [
+                    f"date:{case_date.isoformat()}",
+                    "mode:delta",
+                    f"field:{case_field}",
+                    f"{case_field}:{signed_amount}",
+                ]
+            else:
+                note_parts = [f"date:{case_date.isoformat()}", f"field:{case_field}", f"{case_field}:{signed_amount}"]
             if case_field == "銷售請款額":
-                note_parts.append(f"請款額1%:{calc_request_pct(case_amount)}")
+                note_parts.append(f"請款額1%:{calc_request_pct(abs(case_amount))}")
             save_import_records(
                 "全案總表手動",
                 "manual_case",
@@ -940,32 +1051,76 @@ with tab_manual:
                 hr_project = st.selectbox("案場", PROJECT_OPTIONS, key="m_hr_project")
             with c4:
                 hr_date = st.date_input("日期", key="m_hr_date")
-            c5, c6, c7 = st.columns(3)
-            with c5:
-                hr_item = st.selectbox(
-                    "項目",
-                    HR_MANUAL_ITEM_OPTIONS + ["勞保", "勞退", "健保", "二代", "所得稅", "執行業務所得"],
-                    key="m_hr_item",
-                )
-            with c6:
-                hr_amount = st.number_input("金額", min_value=0.0, step=100.0, format="%.0f", key="m_hr_amount")
-            with c7:
+
+            st.markdown("**① 項目**")
+            h1, h2, h3, h4 = st.columns(4)
+            with h1:
+                hr_item = st.selectbox("項目", HR_MANUAL_ITEM_OPTIONS, key="m_hr_item")
+            with h2:
+                hr_item_amount = st.number_input("金額", min_value=0.0, step=100.0, format="%.0f", key="m_hr_item_amount")
+            with h3:
+                hr_bonus_type = st.selectbox("獎項", [""] + BONUS_TYPE_OPTIONS, key="m_hr_bonus_type")
+            with h4:
                 hr_times = st.selectbox("次數", [str(i) for i in range(1, 21)], key="m_hr_times")
-            hr_bonus_type = ""
-            if hr_item == "獎金":
-                hr_bonus_type = st.selectbox("獎項", BONUS_TYPE_OPTIONS, key="m_hr_bonus_type")
+
+            st.markdown("**② 法扣**")
+            d1, d2 = st.columns(2)
+            with d1:
+                hr_labor = st.number_input("勞保", min_value=0.0, step=100.0, format="%.0f", key="m_hr_labor")
+            with d2:
+                hr_pension = st.number_input("勞退", min_value=0.0, step=100.0, format="%.0f", key="m_hr_pension")
+
+            st.markdown("**③ 保費**")
+            i1, i2 = st.columns(2)
+            with i1:
+                hr_health = st.number_input("健保", min_value=0.0, step=100.0, format="%.0f", key="m_hr_health")
+            with i2:
+                hr_nhi2 = st.number_input("二代", min_value=0.0, step=100.0, format="%.0f", key="m_hr_nhi2")
+
+            st.markdown("**④ 稅務**")
+            t1, t2 = st.columns(2)
+            with t1:
+                hr_income_tax = st.number_input("所得稅", min_value=0.0, step=100.0, format="%.0f", key="m_hr_income_tax")
+            with t2:
+                hr_business = st.number_input("執行業務所得", min_value=0.0, step=100.0, format="%.0f", key="m_hr_business")
+
+            hr_note_text = st.text_input("備註（可空白）", key="m_hr_note")
             submit_hr = st.form_submit_button("新增人事成本資料")
         if submit_hr:
             if not hr_name.strip():
                 st.error("請輸入姓名。")
             else:
+                item_amounts = {
+                    "薪資": float(hr_item_amount) if hr_item == "薪資" else 0.0,
+                    "三節": float(hr_item_amount) if hr_item == "三節" else 0.0,
+                    "獎金": float(hr_item_amount) if hr_item == "獎金" else 0.0,
+                    "員工福利": float(hr_item_amount) if hr_item == "員工福利" else 0.0,
+                }
                 note_parts = [
                     f"date:{hr_date.isoformat()}",
-                    f"{hr_item}:{float(hr_amount)}",
+                    f"勞保:{float(hr_labor)}",
+                    f"勞退:{float(hr_pension)}",
+                    f"健保:{float(hr_health)}",
+                    f"二代:{float(hr_nhi2)}",
+                    f"所得稅:{float(hr_income_tax)}",
+                    f"執行業務所得:{float(hr_business)}",
+                    f"薪資:{item_amounts['薪資']}",
+                    f"三節:{item_amounts['三節']}",
+                    f"獎金:{item_amounts['獎金']}",
+                    f"員工福利:{item_amounts['員工福利']}",
                     f"次數:{hr_times}",
                 ]
-                if hr_bonus_type:
-                    note_parts.append(f"獎項:{hr_bonus_type}")
+                if hr_bonus_type.strip():
+                    note_parts.append(f"獎項:{hr_bonus_type.strip()}")
+                if hr_note_text.strip():
+                    note_parts.append(hr_note_text.strip())
+                total = (
+                    sum(item_amounts.values())
+                    + float(hr_labor)
+                    + float(hr_pension)
+                    + float(hr_health)
+                    + float(hr_nhi2)
+                )
                 save_import_records(
                     "人事成本手動",
                     "manual_hr",
@@ -975,10 +1130,10 @@ with tab_manual:
                         "company_name": None,
                         "project_name": hr_project,
                         "roc_year": int(hr_year),
-                        "salary": float(hr_amount) if hr_item == "薪資" else 0.0,
-                        "bonus": float(hr_amount) if hr_item == "獎金" else 0.0,
-                        "welfare": float(hr_amount) if hr_item == "員工福利" else 0.0,
-                        "total_income": float(hr_amount),
+                        "salary": item_amounts["薪資"],
+                        "bonus": item_amounts["獎金"],
+                        "welfare": item_amounts["員工福利"],
+                        "total_income": total,
                         "note": append_note_parts(note_parts),
                     }],
                 )
@@ -1057,6 +1212,14 @@ with tab_batches:
         st.dataframe(pd.DataFrame([dict(r) for r in batches]), use_container_width=True, hide_index=True)
     else:
         st.info("尚無匯入紀錄。")
+
+    st.markdown("### 清空全部資料")
+    st.warning("此操作會刪除所有薪資紀錄與匯入批次，且無法復原。請先下載備份。")
+    confirm_clear = st.checkbox("我了解並確認要清空全部資料", key="confirm_clear_all")
+    if st.button("清空全部資料", type="primary", disabled=not confirm_clear, key="clear_all_data_btn"):
+        deleted_records, deleted_batches = clear_all_data()
+        st.success(f"已清空：刪除 {deleted_records} 筆紀錄、{deleted_batches} 筆匯入批次。")
+        st.rerun()
 
     st.markdown("### 資料庫備份與還原")
     db_file = Path(DB_PATH)

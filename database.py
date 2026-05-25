@@ -197,6 +197,14 @@ def update_payroll_record(record_id: int, data: dict) -> None:
         conn.commit()
 
 
+def clear_all_data() -> tuple[int, int]:
+    with closing(get_connection()) as conn:
+        records_cursor = conn.execute("DELETE FROM payroll_records")
+        batches_cursor = conn.execute("DELETE FROM import_batches")
+        conn.commit()
+    return int(records_cursor.rowcount or 0), int(batches_cursor.rowcount or 0)
+
+
 def delete_payroll_records(record_ids: List[int]) -> int:
     ids = [int(i) for i in record_ids if str(i).isdigit()]
     if not ids:
