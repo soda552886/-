@@ -773,7 +773,7 @@ with tab_import:
         type=["xlsx", "xls", "csv"],
         key="upload_hr_detail",
     )
-    replace_hr_only = st.checkbox("匯入前刪除舊的「人事成本」資料", value=False, key="replace_hr_detail")
+    replace_hr_only = st.checkbox("匯入前刪除所有報表資料（含舊版）", value=False, key="replace_hr_detail")
     if detail_file is not None:
         try:
             detail_records, detail_preview = parse_hr_detail_workbook(detail_file.getvalue(), detail_file.name)
@@ -796,8 +796,8 @@ with tab_import:
     if detail_records and st.button("確認匯入", type="primary", key="confirm_hr_detail_import"):
         try:
             if replace_hr_only:
-                deleted = delete_records_by_source("人事成本")
-                st.info(f"已先刪除舊人事成本 {deleted} 筆。")
+                deleted_records, deleted_batches = clear_all_data()
+                st.info(f"已先刪除所有報表資料：{deleted_records} 筆紀錄、{deleted_batches} 筆匯入批次。")
             batch_name = st.session_state.get("hr_detail_import_filename", "hr_detail_import")
             total = save_import_records("人事成本", batch_name, detail_records)
             st.success(f"匯入成功，共 {total} 筆人事成本。")
@@ -812,13 +812,12 @@ with tab_import:
     st.subheader("人事成本系統.xlsx（整份範本）")
     st.caption("請使用範本檔（含全案總表、人事成本等分頁）；若含「檔案匯入資料」分頁也會一併匯入。")
     hr_file = st.file_uploader("上傳人事成本系統檔", type=["xlsx", "xls"], key="upload_hr_system")
-    replace_all = st.checkbox("匯入前刪除舊的「全案總表」與「人事成本」資料", value=True, key="replace_hr_system")
+    replace_all = st.checkbox("匯入前刪除所有報表資料（含舊版）", value=True, key="replace_hr_system")
     if hr_file is not None and st.button("匯入人事成本系統", key="import_hr_system"):
         try:
             if replace_all:
-                d1 = delete_records_by_source("全案總表")
-                d2 = delete_records_by_source("人事成本")
-                st.info(f"已先刪除舊資料：全案總表 {d1} 筆、人事成本 {d2} 筆。")
+                deleted_records, deleted_batches = clear_all_data()
+                st.info(f"已先刪除所有報表資料：{deleted_records} 筆紀錄、{deleted_batches} 筆匯入批次。")
             parsed = parse_hr_system_workbook(hr_file.getvalue())
             total = 0
             for source_type, records in parsed.items():
@@ -869,6 +868,24 @@ with tab_import:
 with tab_report:
     st.subheader("報表呈現")
     records = list_payroll_records(limit=100000)
+    if records:
+        with st.expander("清空所有報表資料", expanded=False):
+            st.warning(
+                "將刪除全案總表、人事成本、在職年統計、個人所得及舊版來源的全部資料，無法復原。"
+            )
+            confirm_report_clear = st.checkbox(
+                "我了解並確認要清空所有報表資料",
+                key="confirm_report_clear_all",
+            )
+            if st.button(
+                "清空所有報表資料",
+                type="primary",
+                disabled=not confirm_report_clear,
+                key="clear_all_report_data_btn",
+            ):
+                deleted_records, deleted_batches = clear_all_data()
+                st.success(f"已清空：刪除 {deleted_records} 筆紀錄、{deleted_batches} 筆匯入批次。")
+                st.rerun()
     if not records:
         st.info("目前沒有資料，請先到「匯入資料」上傳「人事成本系統.xlsx」。")
     else:
@@ -1213,10 +1230,12 @@ with tab_batches:
     else:
         st.info("尚無匯入紀錄。")
 
-    st.markdown("### 清空全部資料")
-    st.warning("此操作會刪除所有薪資紀錄與匯入批次，且無法復原。請先下載備份。")
-    confirm_clear = st.checkbox("我了解並確認要清空全部資料", key="confirm_clear_all")
-    if st.button("清空全部資料", type="primary", disabled=not confirm_clear, key="clear_all_data_btn"):
+    st.markdown("### 清空所有報表資料")
+    st.warning(
+        "將刪除全案總表、人事成本、在職年統計、個人所得及舊版來源的全部資料，無法復原。請先下載備份。"
+    )
+    confirm_clear = st.checkbox("我了解並確認要清空所有報表資料", key="confirm_clear_all")
+    if st.button("清空所有報表資料", type="primary", disabled=not confirm_clear, key="clear_all_data_btn"):
         deleted_records, deleted_batches = clear_all_data()
         st.success(f"已清空：刪除 {deleted_records} 筆紀錄、{deleted_batches} 筆匯入批次。")
         st.rerun()
