@@ -949,7 +949,10 @@ with tab_report:
                 "case_total",
                 percent_cols=["比例"],
             )
-            st.caption("人事成本由人事成本分頁帶入；比例(%) = 人事成本 ÷ 請款額1% × 100。")
+            st.caption(
+                "人事成本由人事成本資料帶入（僅匯入人事成本時也會顯示）；"
+                "比例(%) = 人事成本 ÷ 請款額1% × 100。"
+            )
         elif report_view == "人事成本":
             hr_df = build_hr_cost_frame(df_all, filter_year)
             show_report_table(
@@ -981,7 +984,10 @@ with tab_report:
                 "個人所得_匯出.xlsx",
                 "personal_income",
             )
-            st.caption("金額 = 薪資 + 獎金；實領金額 = 金額 - 所得稅 - 執行業務所得 - 二代健保。")
+            st.caption(
+                "金額 = 薪資 + 獎金；稅務取自人事成本的所得稅、執行業務所得、二代；"
+                "實領金額 = 金額 - 所得稅 - 執行業務所得 - 二代健保。"
+            )
 
 with tab_manual:
     st.subheader("手動新增資料")
