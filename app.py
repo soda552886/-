@@ -43,6 +43,7 @@ from hr_system_core import (
     calc_hr_ratio,
     calc_request_pct,
     list_legacy_source_counts,
+    delete_legacy_data,
     migrate_all_legacy_records,
     build_hr_import_template_bytes,
     parse_hr_detail_workbook,
@@ -844,6 +845,11 @@ with tab_import:
         if legacy_counts:
             st.write("偵測到可轉換的舊資料：")
             st.json(legacy_counts)
+        else:
+            st.info("目前沒有需要轉換的舊版資料，或已全部轉換完成。")
+
+        col_migrate, col_delete = st.columns(2)
+        with col_migrate:
             if st.button("一鍵轉換舊資料到新格式", key="migrate_legacy_btn"):
                 rows = [dict(r) for r in legacy_records]
                 converted, stats = migrate_all_legacy_records(rows)
@@ -856,14 +862,28 @@ with tab_import:
                     st.success(f"轉換完成，新增 {total} 筆新格式資料。")
                     if stats:
                         st.json(stats)
-                    st.info("舊資料仍保留在資料庫；報表會同時讀取新舊格式。若要刪除舊資料，請到「資料查詢」依來源刪除。")
+                    st.info("舊資料仍保留在資料庫；可按「刪除舊版資料」清除。")
                     st.rerun()
-        else:
-            st.info("目前沒有需要轉換的舊版資料，或已全部轉換完成。")
+        with col_delete:
+            confirm_delete_legacy = st.checkbox("確認刪除舊版資料", key="confirm_delete_legacy")
+            if st.button(
+                "刪除舊版資料",
+                type="primary",
+                disabled=not confirm_delete_legacy,
+                key="delete_legacy_btn",
+            ):
+                deleted, stats = delete_legacy_data()
+                if deleted:
+                    st.success(f"已刪除 {deleted} 筆舊版資料。")
+                    if stats:
+                        st.json(stats)
+                else:
+                    st.info("沒有舊版資料可刪除。")
+                st.rerun()
     else:
         st.info("資料庫尚無資料。")
 
-    st.caption("雲端網站：若舊資料在 Render，請先在雲端按「下載資料庫備份」，在本機還原後轉換，再重新上傳備份。")
+    st.caption("雲端網站：若舊資料在 Render，請到「匯入資料」勾選確認後按「刪除舊版資料」，或到「匯入紀錄」清空全部。")
 
 with tab_report:
     st.subheader("報表呈現")

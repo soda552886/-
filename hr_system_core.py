@@ -175,6 +175,25 @@ def list_legacy_source_counts(df_all: pd.DataFrame) -> dict[str, int]:
     return counts
 
 
+def delete_legacy_data() -> tuple[int, dict[str, int]]:
+    """刪除舊版來源資料（薪資占比、個人所得、總表分表等），保留新格式資料。"""
+    from database import delete_records_by_source, delete_records_by_source_like
+
+    stats: dict[str, int] = {}
+    total = 0
+    for source_type in sorted(LEGACY_CASE_SOURCES | LEGACY_HR_SOURCES):
+        deleted = delete_records_by_source(source_type)
+        if deleted:
+            stats[source_type] = deleted
+            total += deleted
+    for pattern in ["個人所得調整_%", "%總表分表%"]:
+        deleted = delete_records_by_source_like(pattern)
+        if deleted:
+            stats[pattern] = deleted
+            total += deleted
+    return total, stats
+
+
 def _normalize_case_note(note: object) -> str:
     text = "" if pd.isna(note) else str(note)
     replacements = {

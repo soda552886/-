@@ -162,6 +162,20 @@ def delete_records_by_source(source_type: str) -> int:
     return int(cursor.rowcount or 0)
 
 
+def delete_records_by_source_like(source_like: str) -> int:
+    with closing(get_connection()) as conn:
+        cursor = conn.execute(
+            "DELETE FROM payroll_records WHERE source_type LIKE ?",
+            (source_like,),
+        )
+        conn.execute(
+            "DELETE FROM import_batches WHERE source_type LIKE ?",
+            (source_like,),
+        )
+        conn.commit()
+    return int(cursor.rowcount or 0)
+
+
 def update_payroll_record(record_id: int, data: dict) -> None:
     with closing(get_connection()) as conn:
         conn.execute(
