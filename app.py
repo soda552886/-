@@ -43,11 +43,6 @@ from hr_system_core import (
     build_yearly_stat_frame,
     calc_hr_ratio,
     calc_request_pct,
-    list_legacy_source_counts,
-    clear_case_report_data,
-    clear_hr_report_data,
-    delete_legacy_data,
-    migrate_all_legacy_records,
     build_hr_import_template_bytes,
     parse_hr_detail_workbook,
     parse_hr_system_workbook,
@@ -778,7 +773,7 @@ with tab_import:
         type=["xlsx", "xls", "csv"],
         key=f"upload_hr_detail_{uploader_key}",
     )
-    st.caption("匯入時會先清除舊的人事成本（含舊版），再寫入本次檔案；請按「確認匯入」才會寫入資料庫。")
+    st.caption("上傳後按「確認匯入」才會寫入；匯入會累加在現有資料上，不會自動刪除舊資料。")
     if detail_file is not None:
         file_bytes = detail_file.getvalue()
         file_hash = hashlib.md5(file_bytes).hexdigest()
@@ -805,9 +800,6 @@ with tab_import:
 
     if detail_records and st.button("確認匯入", type="primary", key="confirm_hr_detail_import"):
         try:
-            deleted, delete_stats = clear_hr_report_data()
-            if deleted:
-                st.info(f"已清除舊人事成本 {deleted} 筆。")
             batch_name = st.session_state.get("hr_detail_import_filename", "hr_detail_import")
             total = save_import_records("人事成本", batch_name, detail_records)
             st.success(f"匯入成功，共 {total} 筆人事成本。")
@@ -828,14 +820,9 @@ with tab_import:
     st.subheader("人事成本系統.xlsx（整份範本）")
     st.caption("請使用範本檔（含全案總表、人事成本等分頁）；若含「檔案匯入資料」分頁也會一併匯入。")
     hr_file = st.file_uploader("上傳人事成本系統檔", type=["xlsx", "xls"], key="upload_hr_system")
-    st.caption("匯入時會先清除全案總表與人事成本舊資料，再寫入本次檔案。")
+    st.caption("匯入會累加在現有資料上；若要清空請到「匯入紀錄」手動操作。")
     if hr_file is not None and st.button("匯入人事成本系統", key="import_hr_system"):
         try:
-            deleted_hr, _ = clear_hr_report_data()
-            deleted_case, _ = clear_case_report_data()
-            deleted_total = deleted_hr + deleted_case
-            if deleted_total:
-                st.info(f"已清除舊資料 {deleted_total} 筆（人事成本 {deleted_hr}、全案總表 {deleted_case}）。")
             parsed = parse_hr_system_workbook(hr_file.getvalue())
             total = 0
             for source_type, records in parsed.items():
@@ -849,80 +836,9 @@ with tab_import:
         except Exception as exc:
             st.error(f"匯入失敗：{exc}")
 
-    st.divider()
-    st.subheader("舊版網站資料匯入")
-    st.caption(
-        "若你之前用舊系統（薪資占比、個人所得、薪資獎金統計等）存過資料，"
-        "可直接轉成新格式；舊資料也會先嘗試在報表顯示。"
-    )
-    legacy_records = list_payroll_records(limit=100000)
-    if legacy_records:
-        df_legacy = pd.DataFrame([dict(r) for r in legacy_records])
-        legacy_counts = list_legacy_source_counts(df_legacy)
-        if legacy_counts:
-            st.write("偵測到可轉換的舊資料：")
-            st.json(legacy_counts)
-        else:
-            st.info("目前沒有需要轉換的舊版資料，或已全部轉換完成。")
-
-        col_migrate, col_delete = st.columns(2)
-        with col_migrate:
-            if st.button("一鍵轉換舊資料到新格式", key="migrate_legacy_btn"):
-                rows = [dict(r) for r in legacy_records]
-                converted, stats = migrate_all_legacy_records(rows)
-                if not converted:
-                    st.warning("沒有可轉換的資料（可能已轉換過）。")
-                else:
-                    total = 0
-                    for source_type, record in converted:
-                        total += save_import_records(source_type, "legacy_migration", [record])
-                    st.success(f"轉換完成，新增 {total} 筆新格式資料。")
-                    if stats:
-                        st.json(stats)
-                    st.info("舊資料仍保留在資料庫；可按「刪除舊版資料」清除。")
-                    st.rerun()
-        with col_delete:
-            confirm_delete_legacy = st.checkbox("確認刪除舊版資料", key="confirm_delete_legacy")
-            if st.button(
-                "刪除舊版資料",
-                type="primary",
-                disabled=not confirm_delete_legacy,
-                key="delete_legacy_btn",
-            ):
-                deleted, stats = delete_legacy_data()
-                if deleted:
-                    st.success(f"已刪除 {deleted} 筆舊版資料。")
-                    if stats:
-                        st.json(stats)
-                else:
-                    st.info("沒有舊版資料可刪除。")
-                st.rerun()
-    else:
-        st.info("資料庫尚無資料。")
-
-    st.caption("雲端網站：若舊資料在 Render，請到「匯入資料」勾選確認後按「刪除舊版資料」，或到「匯入紀錄」清空全部。")
-
 with tab_report:
     st.subheader("報表呈現")
     records = list_payroll_records(limit=100000)
-    if records:
-        with st.expander("清空所有報表資料", expanded=False):
-            st.warning(
-                "將刪除全案總表、人事成本、在職年統計、個人所得及舊版來源的全部資料，無法復原。"
-            )
-            confirm_report_clear = st.checkbox(
-                "我了解並確認要清空所有報表資料",
-                key="confirm_report_clear_all",
-            )
-            if st.button(
-                "清空所有報表資料",
-                type="primary",
-                disabled=not confirm_report_clear,
-                key="clear_all_report_data_btn",
-            ):
-                deleted_records, deleted_batches = clear_all_data()
-                st.success(f"已清空：刪除 {deleted_records} 筆紀錄、{deleted_batches} 筆匯入批次。")
-                st.rerun()
     if not records:
         st.info("目前沒有資料，請先到「匯入資料」上傳「人事成本系統.xlsx」。")
     else:
@@ -1208,13 +1124,13 @@ with tab_query:
     with q2:
         source_type = st.selectbox(
             "來源",
-            ["全部", "全案總表", "人事成本", "薪資占比", "個人所得", "薪資獎金統計", "全案總表手動", "人事成本手動"],
+            ["全部", "全案總表", "全案總表手動", "人事成本", "人事成本手動"],
         )
     with q3:
         year_input = st.text_input("年度(民國)", placeholder="例如 114")
     roc_year = int(year_input) if year_input.strip().isdigit() else None
 
-    rows = list_payroll_records(keyword=keyword, source_type=source_type, roc_year=roc_year)
+    rows = list_payroll_records(keyword=keyword, source_type=source_type, roc_year=roc_year, limit=100000)
     if rows:
         df = pd.DataFrame([dict(r) for r in rows])
         edit_cols = [
@@ -1273,12 +1189,10 @@ with tab_batches:
     else:
         st.info("尚無匯入紀錄。")
 
-    st.markdown("### 清空所有報表資料")
-    st.warning(
-        "將刪除全案總表、人事成本、在職年統計、個人所得及舊版來源的全部資料，無法復原。請先下載備份。"
-    )
-    confirm_clear = st.checkbox("我了解並確認要清空所有報表資料", key="confirm_clear_all")
-    if st.button("清空所有報表資料", type="primary", disabled=not confirm_clear, key="clear_all_data_btn"):
+    st.markdown("### 手動清空全部資料")
+    st.warning("僅在您要全部重來時使用；平常匯入與手動新增不會刪除資料。請先下載備份。")
+    confirm_clear = st.checkbox("我了解並確認要清空全部資料", key="confirm_clear_all")
+    if st.button("清空全部資料", type="primary", disabled=not confirm_clear, key="clear_all_data_btn"):
         deleted_records, deleted_batches = clear_all_data()
         st.success(f"已清空：刪除 {deleted_records} 筆紀錄、{deleted_batches} 筆匯入批次。")
         st.rerun()
