@@ -1,3 +1,4 @@
+import hashlib
 import re
 from io import BytesIO
 from typing import List
@@ -43,6 +44,8 @@ from hr_system_core import (
     calc_hr_ratio,
     calc_request_pct,
     list_legacy_source_counts,
+    clear_case_report_data,
+    clear_hr_report_data,
     delete_legacy_data,
     migrate_all_legacy_records,
     build_hr_import_template_bytes,
@@ -769,42 +772,54 @@ with tab_import:
     with col_hint:
         st.info("項目＝薪資/三節/獎金/員工福利；保費＝健保/二代；稅款＝所得稅/執行業務所得。")
 
+    uploader_key = st.session_state.get("upload_hr_detail_key", 0)
     detail_file = st.file_uploader(
         "上傳匯入檔",
         type=["xlsx", "xls", "csv"],
-        key="upload_hr_detail",
+        key=f"upload_hr_detail_{uploader_key}",
     )
-    replace_hr_only = st.checkbox("匯入前刪除所有報表資料（含舊版）", value=False, key="replace_hr_detail")
+    st.caption("匯入時會先清除舊的人事成本（含舊版），再寫入本次檔案；請按「確認匯入」才會寫入資料庫。")
     if detail_file is not None:
-        try:
-            detail_records, detail_preview = parse_hr_detail_workbook(detail_file.getvalue(), detail_file.name)
-            st.session_state["hr_detail_import_records"] = detail_records
-            st.session_state["hr_detail_import_preview"] = detail_preview
-            st.session_state["hr_detail_import_filename"] = detail_file.name
-        except Exception as exc:
-            st.error(f"讀檔失敗：{exc}")
-            st.session_state.pop("hr_detail_import_records", None)
+        file_bytes = detail_file.getvalue()
+        file_hash = hashlib.md5(file_bytes).hexdigest()
+        if st.session_state.get("hr_detail_file_hash") != file_hash:
+            try:
+                detail_records, detail_preview = parse_hr_detail_workbook(file_bytes, detail_file.name)
+                st.session_state["hr_detail_import_records"] = detail_records
+                st.session_state["hr_detail_import_preview"] = detail_preview
+                st.session_state["hr_detail_import_filename"] = detail_file.name
+                st.session_state["hr_detail_file_hash"] = file_hash
+            except Exception as exc:
+                st.error(f"讀檔失敗：{exc}")
+                for key in ("hr_detail_import_records", "hr_detail_import_preview", "hr_detail_import_filename", "hr_detail_file_hash"):
+                    st.session_state.pop(key, None)
 
     preview_df = st.session_state.get("hr_detail_import_preview")
     detail_records = st.session_state.get("hr_detail_import_records", [])
     if preview_df is not None and not (isinstance(preview_df, pd.DataFrame) and preview_df.empty):
-        st.markdown("### 檔案匯入資料")
+        st.markdown("### 檔案匯入資料（預覽，尚未寫入）")
         st.dataframe(preview_df, use_container_width=True, hide_index=True)
-        st.caption(f"共 {len(detail_records)} 筆可匯入。")
+        st.caption(f"共 {len(detail_records)} 筆可匯入。請按下方「確認匯入」。")
     elif detail_file is not None and not detail_records:
         st.warning("檔案中沒有可匯入的資料列，請確認欄位與範本一致。")
 
     if detail_records and st.button("確認匯入", type="primary", key="confirm_hr_detail_import"):
         try:
-            if replace_hr_only:
-                deleted_records, deleted_batches = clear_all_data()
-                st.info(f"已先刪除所有報表資料：{deleted_records} 筆紀錄、{deleted_batches} 筆匯入批次。")
+            deleted, delete_stats = clear_hr_report_data()
+            if deleted:
+                st.info(f"已清除舊人事成本 {deleted} 筆。")
             batch_name = st.session_state.get("hr_detail_import_filename", "hr_detail_import")
             total = save_import_records("人事成本", batch_name, detail_records)
             st.success(f"匯入成功，共 {total} 筆人事成本。")
             st.info("在職年統計、個人所得會依人事成本資料自動計算顯示。")
-            for key in ("hr_detail_import_records", "hr_detail_import_preview", "hr_detail_import_filename"):
+            for key in (
+                "hr_detail_import_records",
+                "hr_detail_import_preview",
+                "hr_detail_import_filename",
+                "hr_detail_file_hash",
+            ):
                 st.session_state.pop(key, None)
+            st.session_state["upload_hr_detail_key"] = uploader_key + 1
             st.rerun()
         except Exception as exc:
             st.error(f"匯入失敗：{exc}")
@@ -813,12 +828,14 @@ with tab_import:
     st.subheader("人事成本系統.xlsx（整份範本）")
     st.caption("請使用範本檔（含全案總表、人事成本等分頁）；若含「檔案匯入資料」分頁也會一併匯入。")
     hr_file = st.file_uploader("上傳人事成本系統檔", type=["xlsx", "xls"], key="upload_hr_system")
-    replace_all = st.checkbox("匯入前刪除所有報表資料（含舊版）", value=True, key="replace_hr_system")
+    st.caption("匯入時會先清除全案總表與人事成本舊資料，再寫入本次檔案。")
     if hr_file is not None and st.button("匯入人事成本系統", key="import_hr_system"):
         try:
-            if replace_all:
-                deleted_records, deleted_batches = clear_all_data()
-                st.info(f"已先刪除所有報表資料：{deleted_records} 筆紀錄、{deleted_batches} 筆匯入批次。")
+            deleted_hr, _ = clear_hr_report_data()
+            deleted_case, _ = clear_case_report_data()
+            deleted_total = deleted_hr + deleted_case
+            if deleted_total:
+                st.info(f"已清除舊資料 {deleted_total} 筆（人事成本 {deleted_hr}、全案總表 {deleted_case}）。")
             parsed = parse_hr_system_workbook(hr_file.getvalue())
             total = 0
             for source_type, records in parsed.items():

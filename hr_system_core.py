@@ -194,6 +194,39 @@ def delete_legacy_data() -> tuple[int, dict[str, int]]:
     return total, stats
 
 
+def clear_hr_report_data() -> tuple[int, dict[str, int]]:
+    """匯入前清除人事成本相關資料（新格式 + 舊版）。"""
+    from database import delete_records_by_source, delete_records_by_source_like
+
+    stats: dict[str, int] = {}
+    total = 0
+    for source_type in sorted(NEW_HR_SOURCES | LEGACY_HR_SOURCES):
+        deleted = delete_records_by_source(source_type)
+        if deleted:
+            stats[source_type] = deleted
+            total += deleted
+    for pattern in ["個人所得調整_%", "%總表分表%"]:
+        deleted = delete_records_by_source_like(pattern)
+        if deleted:
+            stats[pattern] = deleted
+            total += deleted
+    return total, stats
+
+
+def clear_case_report_data() -> tuple[int, dict[str, int]]:
+    """匯入前清除全案總表相關資料（新格式 + 舊版）。"""
+    from database import delete_records_by_source
+
+    stats: dict[str, int] = {}
+    total = 0
+    for source_type in sorted(NEW_CASE_SOURCES | LEGACY_CASE_SOURCES):
+        deleted = delete_records_by_source(source_type)
+        if deleted:
+            stats[source_type] = deleted
+            total += deleted
+    return total, stats
+
+
 def _normalize_case_note(note: object) -> str:
     text = "" if pd.isna(note) else str(note)
     replacements = {
@@ -916,10 +949,7 @@ def _merge_case_notes(note_series: pd.Series) -> dict[str, float]:
 
 
 def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
-    sources = _filter_sources(
-        df_all,
-        ["全案總表", "全案總表手動", "全案總表調整", "薪資占比", "總表主表手動", "總表主表調整"],
-    )
+    sources = _filter_sources(df_all, list(NEW_CASE_SOURCES))
 
     hr_agg = build_hr_cost_frame(df_all, filter_year=filter_year)
     hr_lookup: dict[tuple[int, str], float] = {}
@@ -1036,19 +1066,6 @@ def build_hr_cost_frame(df_all: pd.DataFrame, filter_year: int | None = None) ->
         item = _hr_display_item(yr, str(row.get("project_name") or ""), str(note or ""), float(row.get("total_income") or 0))
         rows.append(item)
 
-    for _, row in df_all.iterrows():
-        if is_migrated_note(row.get("note")):
-            continue
-        if not is_legacy_hr_source(row.get("source_type")):
-            continue
-        for item in legacy_hr_display_items(row.to_dict()):
-            yr = item.get("年度")
-            if yr is None:
-                continue
-            if filter_year is not None and yr != filter_year:
-                continue
-            rows.append(item)
-
     if not rows:
         return pd.DataFrame(columns=HR_COST_COLS)
     out = pd.DataFrame(rows).groupby(["年度", "案場"], as_index=False).sum(numeric_only=True)
@@ -1078,31 +1095,6 @@ def build_yearly_stat_frame(df_all: pd.DataFrame) -> pd.DataFrame:
         if amount <= 0:
             amount = float(row.get("salary") or 0) + float(row.get("bonus") or 0)
         append_yearly(name, yr, amount)
-
-    for _, row in df_all.iterrows():
-        if is_migrated_note(row.get("note")):
-            continue
-        st = str(row.get("source_type") or "")
-        if st in {"薪資獎金統計", "在職年手動", "在職年調整"}:
-            name = clean_text(row.get("employee_name"))
-            if not name:
-                continue
-            year_amounts = parse_year_amounts(row.get("note"))
-            if not year_amounts:
-                yr = roc_year_from_value(row.get("roc_year")) or 114
-                amt = float(row.get("bonus") or 0) + float(row.get("salary") or 0)
-                append_yearly(name, yr, amt)
-            else:
-                for y_text, amt in year_amounts.items():
-                    yr = roc_year_from_value(y_text)
-                    if yr is not None:
-                        append_yearly(name, yr, amt)
-        elif is_legacy_hr_source(st):
-            name = clean_text(row.get("employee_name"))
-            if not name:
-                continue
-            for item in legacy_hr_display_items(row.to_dict()):
-                append_yearly(name, int(item["年度"]), float(item.get("薪資", 0)) + float(item.get("獎金", 0)))
 
     if not rows:
         return pd.DataFrame(columns=YEARLY_STAT_COLS)
@@ -1167,41 +1159,6 @@ def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = 
                 "實領金額": net,
             }
         )
-
-    for _, row in df_all.iterrows():
-        if is_migrated_note(row.get("note")):
-            continue
-        st = str(row.get("source_type") or "")
-        if st in {"個人所得", "個人所得手動"} or st.startswith("個人所得調整"):
-            for item in legacy_personal_income_items(row.to_dict()):
-                if filter_year is not None and item.get("年度") != filter_year:
-                    continue
-                rows.append(item)
-        elif is_legacy_hr_source(st) and clean_text(row.get("employee_name")):
-            for item in legacy_hr_display_items(row.to_dict()):
-                yr = item.get("年度")
-                if filter_year is not None and yr != filter_year:
-                    continue
-                amount = float(item.get("薪資", 0)) + float(item.get("獎金", 0))
-                note = str(row.get("note") or "")
-                income_tax, business, health2 = resolve_tax_amounts(
-                    pd.Series(dtype=object),
-                    note=note,
-                )
-                if health2 == 0:
-                    health2 = float(row.get("welfare") or 0)
-                rows.append(
-                    {
-                        "年度": yr,
-                        "案場": str(row.get("project_name") or item.get("案場") or ""),
-                        "姓名": clean_text(row.get("employee_name")),
-                        "金額": amount,
-                        "所得稅": income_tax,
-                        "執行業務所得": business,
-                        "二代健保": health2,
-                        "實領金額": round(amount - income_tax - business - health2),
-                    }
-                )
 
     if not rows:
         return pd.DataFrame(columns=PERSONAL_INCOME_COLS)
