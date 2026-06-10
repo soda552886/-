@@ -44,7 +44,7 @@ CASE_TOTAL_COLS = [
 ]
 HR_COST_COLS = ["年度", "案場", "勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "總計"]
 YEARLY_STAT_COLS = ["姓名", "113年", "114年", "115年", "總計"]
-PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
+PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "日期", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
 
 CASE_NOTE_KEYS = ["總銷", "簽約金額", "銷售請款額", "請款額1%", "請款淨額", "營收", "營收(未進帳)"]
 CASE_OVERWRITE_FIELDS = {"總銷"}
@@ -483,42 +483,48 @@ def normalize_insurance_type(value: object) -> str:
 
 
 def normalize_tax_type(value: object) -> str:
-    text = clean_text(value)
+    text = clean_text(value).replace(" ", "")
     if not text:
         return ""
-    if "執行" in text or "業務" in text:
+    # 執行業務須先於「所得」，避免「執行業務所得」被誤判
+    if any(k in text for k in ("執行業務所得", "執行業務", "執業務", "執業")):
+        return "執行業務所得"
+    if "執行" in text and "業" in text:
+        return "執行業務所得"
+    if "業務" in text:
         return "執行業務所得"
     if "所得" in text:
         return "所得稅"
-    return text
+    return ""
 
 
-def resolve_tax_amounts(row: pd.Series, note: object = "") -> tuple[float, float, float]:
-    """回傳 (所得稅, 執行業務所得, 二代健保)。"""
+def parse_tax_amounts_from_note(note: object) -> tuple[float, float, float]:
+    """從 note 讀取 (所得稅, 執行業務所得, 二代健保)。"""
+    return (
+        parse_note_number(note, "所得稅"),
+        parse_note_number(note, "執行業務所得"),
+        parse_note_number(note, "二代") or parse_note_number(note, "二代健保"),
+    )
+
+
+def parse_import_row_taxes(row: pd.Series) -> tuple[float, float, float]:
+    """從匯入列讀取稅務金額。"""
     income_tax = to_number(row.get("所得稅")) if "所得稅" in row.index else 0.0
     business = to_number(row.get("執行業務所得")) if "執行業務所得" in row.index else 0.0
     health2 = to_number(row.get("二代健保")) if "二代健保" in row.index else 0.0
-    if income_tax == 0:
-        income_tax = parse_note_number(note, "所得稅")
-    if business == 0:
-        business = parse_note_number(note, "執行業務所得")
-    if health2 == 0:
-        health2 = parse_note_number(note, "二代") or parse_note_number(note, "二代健保")
 
-    tax_type = normalize_tax_type(row.get("稅款"))
+    tax_raw = clean_text(row.get("稅款"))
     tax_amount = to_number(row.get("稅款金額"))
     if tax_amount > 0:
-        if tax_type == "所得稅":
+        kind = normalize_tax_type(tax_raw)
+        if kind == "所得稅":
             income_tax = tax_amount
-        elif tax_type == "執行業務所得":
+        elif kind == "執行業務所得":
             business = tax_amount
-        elif not tax_type:
-            if income_tax == 0:
-                income_tax = tax_amount
 
     ins_type = normalize_insurance_type(row.get("保費"))
     ins_amount = to_number(row.get("保費金額"))
-    if ins_amount > 0 and ins_type == "二代":
+    if ins_type == "二代" and ins_amount > 0:
         health2 = ins_amount
     return income_tax, business, health2
 
@@ -589,22 +595,22 @@ def build_hr_cost_record(
     pension: float,
     insurance_type: str,
     insurance_amount: float,
-    tax_type: str,
-    tax_amount: float,
-    bonus_type: str,
-    times: str,
-    remark: str,
+    income_tax: float = 0.0,
+    business_income: float = 0.0,
+    health2: float = 0.0,
+    bonus_type: str = "",
+    times: str = "1",
+    remark: str = "",
 ) -> dict:
     item_amounts = {name: 0.0 for name in HR_MANUAL_ITEM_OPTIONS}
     if item in item_amounts:
         item_amounts[item] = float(item_amount or 0)
 
     ins_type = normalize_insurance_type(insurance_type)
-    tax_kind = normalize_tax_type(tax_type)
     health = float(insurance_amount or 0) if ins_type == "健保" else 0.0
-    nhi2 = float(insurance_amount or 0) if ins_type == "二代" else 0.0
-    income_tax = float(tax_amount or 0) if tax_kind == "所得稅" else 0.0
-    business = float(tax_amount or 0) if tax_kind == "執行業務所得" else 0.0
+    nhi2 = float(health2 or 0) if health2 else (float(insurance_amount or 0) if ins_type == "二代" else 0.0)
+    income_tax = float(income_tax or 0)
+    business = float(business_income or 0)
 
     note_parts = [
         f"date:{date_text}" if date_text else "",
@@ -655,15 +661,7 @@ def _hr_detail_row_to_record(row: pd.Series) -> dict | None:
     pension = to_number(row.get("勞退"))
     insurance_type = normalize_insurance_type(row.get("保費"))
     insurance_amount = to_number(row.get("保費金額"))
-    tax_type = normalize_tax_type(row.get("稅款"))
-    tax_amount = to_number(row.get("稅款金額"))
-    direct_income_tax, direct_business, direct_health2 = resolve_tax_amounts(row)
-    if direct_income_tax > 0:
-        tax_type = "所得稅"
-        tax_amount = direct_income_tax
-    elif direct_business > 0:
-        tax_type = "執行業務所得"
-        tax_amount = direct_business
+    income_tax, business_income, health2 = parse_import_row_taxes(row)
     bonus_type = clean_text(row.get("獎項"))
     times = clean_text(row.get("次數")) or "1"
     remark = clean_text(row.get("備註"))
@@ -675,16 +673,15 @@ def _hr_detail_row_to_record(row: pd.Series) -> dict | None:
             labor,
             pension,
             insurance_amount,
-            tax_amount,
-            direct_income_tax,
-            direct_business,
-            direct_health2,
+            income_tax,
+            business_income,
+            health2,
             item,
         ]
     ):
         return None
 
-    record = build_hr_cost_record(
+    return build_hr_cost_record(
         roc_year=year,
         project_name=project,
         employee_name=name or "未命名",
@@ -695,19 +692,13 @@ def _hr_detail_row_to_record(row: pd.Series) -> dict | None:
         pension=pension,
         insurance_type=insurance_type,
         insurance_amount=insurance_amount,
-        tax_type=tax_type,
-        tax_amount=tax_amount,
+        income_tax=income_tax,
+        business_income=business_income,
+        health2=health2,
         bonus_type=bonus_type,
         times=times,
         remark=remark,
     )
-    if direct_health2 > 0 and parse_note_number(record["note"], "二代") == 0:
-        record["note"] = append_note_parts([record["note"], f"二代:{direct_health2}"])
-    if direct_income_tax > 0 and parse_note_number(record["note"], "所得稅") == 0:
-        record["note"] = append_note_parts([record["note"], f"所得稅:{direct_income_tax}"])
-    if direct_business > 0 and parse_note_number(record["note"], "執行業務所得") == 0:
-        record["note"] = append_note_parts([record["note"], f"執行業務所得:{direct_business}"])
-    return record
 
 
 def parse_hr_detail_dataframe(df: pd.DataFrame) -> tuple[list[dict], pd.DataFrame]:
@@ -733,6 +724,8 @@ def parse_hr_detail_dataframe(df: pd.DataFrame) -> tuple[list[dict], pd.DataFram
                 "保費金額": to_number(row.get("保費金額")),
                 "稅款": clean_text(row.get("稅款")),
                 "稅款金額": to_number(row.get("稅款金額")),
+                "所得稅": parse_note_number(record["note"], "所得稅"),
+                "執行業務所得": parse_note_number(record["note"], "執行業務所得"),
                 "獎項": parse_note_value(record["note"], "獎項"),
                 "次數": parse_note_value(record["note"], "次數"),
                 "備註": clean_text(row.get("備註")),
@@ -1140,18 +1133,17 @@ def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = 
         salary = parse_note_number(note, "薪資")
         bonus = parse_note_number(note, "獎金")
         amount = salary + bonus
-        income_tax, business_income, health2 = resolve_tax_amounts(
-            pd.Series(dtype=object),
-            note=str(note or ""),
-        )
+        income_tax, business_income, health2 = parse_tax_amounts_from_note(note)
         if amount <= 0 and income_tax == 0 and business_income == 0 and health2 == 0:
             continue
         net = round(amount - income_tax - business_income - health2)
+        date_text = parse_note_value(note, "date")
         rows.append(
             {
                 "年度": yr,
                 "案場": str(row.get("project_name") or ""),
                 "姓名": name,
+                "日期": date_text,
                 "金額": amount,
                 "所得稅": income_tax,
                 "執行業務所得": business_income,
@@ -1163,4 +1155,4 @@ def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = 
     if not rows:
         return pd.DataFrame(columns=PERSONAL_INCOME_COLS)
     out = pd.DataFrame(rows)
-    return out.groupby(["年度", "案場", "姓名"], as_index=False).sum(numeric_only=True)[PERSONAL_INCOME_COLS]
+    return out.sort_values(["年度", "案場", "姓名", "日期"], na_position="last")[PERSONAL_INCOME_COLS]

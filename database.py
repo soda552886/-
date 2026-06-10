@@ -219,6 +219,15 @@ def clear_all_data() -> tuple[int, int]:
     return int(records_cursor.rowcount or 0), int(batches_cursor.rowcount or 0)
 
 
+def delete_import_batch(batch_id: int) -> tuple[int, int]:
+    bid = int(batch_id)
+    with closing(get_connection()) as conn:
+        records_cursor = conn.execute("DELETE FROM payroll_records WHERE batch_id = ?", (bid,))
+        batches_cursor = conn.execute("DELETE FROM import_batches WHERE id = ?", (bid,))
+        conn.commit()
+    return int(records_cursor.rowcount or 0), int(batches_cursor.rowcount or 0)
+
+
 def delete_payroll_records(record_ids: List[int]) -> int:
     ids = [int(i) for i in record_ids if str(i).isdigit()]
     if not ids:

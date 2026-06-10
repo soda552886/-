@@ -14,6 +14,7 @@ from openpyxl.utils import get_column_letter
 from database import (
     DB_PATH,
     clear_all_data,
+    delete_import_batch,
     delete_payroll_records,
     delete_records_by_source,
     init_db,
@@ -932,14 +933,14 @@ with tab_report:
             show_report_table(
                 income_df,
                 PERSONAL_INCOME_COLS,
-                [c for c in PERSONAL_INCOME_COLS if c not in {"年度", "案場", "姓名"}],
+                [c for c in PERSONAL_INCOME_COLS if c not in {"年度", "案場", "姓名", "日期"}],
                 "個人所得",
                 "個人所得_匯出.xlsx",
                 "personal_income",
             )
             st.caption(
-                "金額 = 薪資 + 獎金；稅務取自人事成本的所得稅、執行業務所得、二代；"
-                "實領金額 = 金額 - 所得稅 - 執行業務所得 - 二代健保。"
+                "每筆人事成本一列（不與舊批次合併）；金額 = 薪資 + 獎金；"
+                "稅款欄請填「執行業務」或「所得稅」；刪除舊資料請到「匯入紀錄」刪除批次。"
             )
 
 with tab_manual:
@@ -1135,6 +1136,7 @@ with tab_query:
         df = pd.DataFrame([dict(r) for r in rows])
         edit_cols = [
             "id",
+            "batch_id",
             "source_type",
             "sheet_name",
             "employee_name",
@@ -1183,9 +1185,22 @@ with tab_query:
 
 with tab_batches:
     st.subheader("匯入批次紀錄")
+    st.caption("可刪除單一批次（該次上傳的全部資料）；不影響其他批次或手動新增的資料。")
     batches = list_batches()
     if batches:
-        st.dataframe(pd.DataFrame([dict(r) for r in batches]), use_container_width=True, hide_index=True)
+        batch_df = pd.DataFrame([dict(r) for r in batches])
+        st.dataframe(batch_df, use_container_width=True, hide_index=True)
+        batch_options = {
+            f"#{b['id']}｜{b['source_type']}｜{b['file_name']}｜{b['row_count']}筆｜{b['imported_at']}": int(b["id"])
+            for b in batches
+        }
+        selected_label = st.selectbox("選擇要刪除的批次", list(batch_options.keys()), key="delete_batch_select")
+        confirm_batch = st.checkbox("確認刪除此批次", key="confirm_delete_batch")
+        if st.button("刪除此批次", type="primary", disabled=not confirm_batch, key="delete_batch_btn"):
+            bid = batch_options[selected_label]
+            deleted_records, deleted_batches = delete_import_batch(bid)
+            st.success(f"已刪除批次 #{bid}：{deleted_records} 筆資料。")
+            st.rerun()
     else:
         st.info("尚無匯入紀錄。")
 
