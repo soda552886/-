@@ -740,8 +740,10 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
+APP_VERSION = "20260524-2"
+
 st.title("人事成本管理系統")
-st.caption("依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。")
+st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
 local_ip = get_local_ip()
 with st.expander("跨裝置開啟網站"):
     st.write("在同一個 Wi-Fi/區網下，請用以下方式啟動：")
@@ -776,10 +778,7 @@ with tab_import:
         type=["xlsx", "xls", "csv"],
         key=f"upload_hr_detail_{uploader_key}",
     )
-    st.caption(
-        "上傳後按「確認匯入」才會寫入。新資料序號（ID）會比舊的大，代表是加在後面；"
-        "舊批次不刪的話，報表選「全部」會跟舊資料一起加總。"
-    )
+    st.caption("上傳後按「確認匯入」才會寫入。舊的「總表分表匯入」請到「匯入紀錄」刪除。")
     if detail_file is not None:
         file_bytes = detail_file.getvalue()
         file_hash = hashlib.md5(file_bytes).hexdigest()
