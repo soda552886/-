@@ -3,10 +3,44 @@ import os
 import sqlite3
 from contextlib import closing
 from datetime import datetime
+from pathlib import Path
 from typing import Iterable, List, Optional
 
+PERSISTENT_DATA_DIR = Path("/var/data")
 
-DB_PATH = os.getenv("DB_PATH", "financial_reports.db")
+
+def resolve_db_path() -> str:
+    configured = os.getenv("DB_PATH", "").strip()
+    if configured:
+        return configured
+    if PERSISTENT_DATA_DIR.is_dir():
+        return str(PERSISTENT_DATA_DIR / "financial_reports.db")
+    return "financial_reports.db"
+
+
+DB_PATH = resolve_db_path()
+
+
+def is_persistent_db() -> bool:
+    if not PERSISTENT_DATA_DIR.is_dir():
+        return False
+    try:
+        Path(DB_PATH).resolve().relative_to(PERSISTENT_DATA_DIR.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def count_payroll_records() -> int:
+    with closing(get_connection()) as conn:
+        row = conn.execute("SELECT COUNT(*) AS c FROM payroll_records").fetchone()
+    return int(row["c"] if row else 0)
+
+
+def count_import_batches() -> int:
+    with closing(get_connection()) as conn:
+        row = conn.execute("SELECT COUNT(*) AS c FROM import_batches").fetchone()
+    return int(row["c"] if row else 0)
 
 
 def get_connection() -> sqlite3.Connection:
@@ -16,6 +50,7 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with closing(get_connection()) as conn:
         conn.execute(
             """

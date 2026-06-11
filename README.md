@@ -41,3 +41,14 @@ streamlit run app.py
 ### 資料庫路徑
 
 - 環境變數 `DB_PATH`（Render 預設 `/var/data/financial_reports.db`）
+
+### 資料過幾小時不見？
+
+Render 免費版會休眠；若**沒有掛 Persistent Disk**，SQLite 寫在暫存目錄，重啟後資料會清空。
+
+請確認：
+
+1. Render → 服務 → **Disks**：有掛載 `/var/data`（`render.yaml` 已設定，需用 Blueprint 建立或手動加 Disk）
+2. **Environment** → `DB_PATH` = `/var/data/financial_reports.db`
+3. 網站左側「資料庫狀態」應顯示「持久化磁碟」；若顯示紅色警告，代表尚未設定正確
+4. 定期在「匯入紀錄」→ **下載資料庫備份**
