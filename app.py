@@ -52,6 +52,25 @@ from hr_system_core import (
 )
 
 
+def filter_df_by_batch(df_all: pd.DataFrame, batch_key: object) -> pd.DataFrame:
+    if df_all.empty or "batch_id" not in df_all.columns:
+        return df_all
+    if batch_key is None:
+        return df_all
+    if batch_key == "latest":
+        latest_id = df_all["batch_id"].max()
+        return df_all[df_all["batch_id"] == latest_id].copy()
+    return df_all[df_all["batch_id"] == int(batch_key)].copy()
+
+
+def build_batch_filter_options(batches: list) -> dict[str, object]:
+    options: dict[str, object] = {"全部（各批次加總，含舊資料）": None, "僅最新一批": "latest"}
+    for b in batches:
+        label = f"批次 #{b['id']}｜{b['file_name']}｜{b['row_count']}筆"
+        options[label] = int(b["id"])
+    return options
+
+
 def format_currency_df(
     df: pd.DataFrame,
     cols: List[str],
@@ -774,7 +793,10 @@ with tab_import:
         type=["xlsx", "xls", "csv"],
         key=f"upload_hr_detail_{uploader_key}",
     )
-    st.caption("上傳後按「確認匯入」才會寫入；匯入會累加在現有資料上，不會自動刪除舊資料。")
+    st.caption(
+        "上傳後按「確認匯入」才會寫入。新資料序號（ID）會比舊的大，代表是加在後面；"
+        "舊批次不刪的話，報表選「全部」會跟舊資料一起加總。"
+    )
     if detail_file is not None:
         file_bytes = detail_file.getvalue()
         file_hash = hashlib.md5(file_bytes).hexdigest()
@@ -802,9 +824,12 @@ with tab_import:
     if detail_records and st.button("確認匯入", type="primary", key="confirm_hr_detail_import"):
         try:
             batch_name = st.session_state.get("hr_detail_import_filename", "hr_detail_import")
-            total = save_import_records("人事成本", batch_name, detail_records)
-            st.success(f"匯入成功，共 {total} 筆人事成本。")
-            st.info("在職年統計、個人所得會依人事成本資料自動計算顯示。")
+            total, batch_id = save_import_records("人事成本", batch_name, detail_records)
+            st.success(f"匯入成功：批次 #{batch_id}，共 {total} 筆。")
+            st.info(
+                f"本次資料在「資料查詢」序號較大屬正常。若報表仍像舊資料，請到「匯入紀錄」刪除舊批次，"
+                f"或「報表呈現」改選「僅最新一批」/「批次 #{batch_id}」。"
+            )
             for key in (
                 "hr_detail_import_records",
                 "hr_detail_import_preview",
@@ -826,10 +851,18 @@ with tab_import:
         try:
             parsed = parse_hr_system_workbook(hr_file.getvalue())
             total = 0
+            batch_ids: list[int] = []
             for source_type, records in parsed.items():
                 if records:
-                    total += save_import_records(source_type, hr_file.name, records)
-            st.success(f"匯入成功，共 {total} 筆（全案總表 {len(parsed.get('全案總表', []))}、人事成本 {len(parsed.get('人事成本', []))}）。")
+                    count, batch_id = save_import_records(source_type, hr_file.name, records)
+                    total += count
+                    if batch_id:
+                        batch_ids.append(batch_id)
+            batch_hint = f"（批次 {', '.join(f'#{i}' for i in batch_ids)}）" if batch_ids else ""
+            st.success(
+                f"匯入成功，共 {total} 筆{batch_hint}"
+                f"（全案總表 {len(parsed.get('全案總表', []))}、人事成本 {len(parsed.get('人事成本', []))}）。"
+            )
             st.info("在職年統計、個人所得會依人事成本資料自動計算顯示。")
             preview = parsed.get("全案總表", []) + parsed.get("人事成本", [])
             if preview:
@@ -844,6 +877,17 @@ with tab_report:
         st.info("目前沒有資料，請先到「匯入資料」上傳「人事成本系統.xlsx」。")
     else:
         df_all = pd.DataFrame([dict(r) for r in records])
+        batch_list = list_batches(limit=500)
+        batch_options = build_batch_filter_options([dict(b) for b in batch_list])
+        bf_label = st.selectbox("資料批次", list(batch_options.keys()), key="report_batch_filter")
+        df_report = filter_df_by_batch(df_all, batch_options[bf_label])
+        if batch_options[bf_label] is None:
+            st.caption(
+                "目前為「全部」：會把每一批匯入加總（序號小的舊資料 + 序號大的新資料）。"
+                "若只要看這次上傳，請改選「僅最新一批」或指定批次。"
+            )
+        else:
+            st.info(f"目前只計算所選批次，共 {len(df_report)} 筆原始資料。")
         fy = st.selectbox("篩選年度", ["全部", *YEAR_OPTIONS], key="report_filter_year")
         filter_year = None if fy == "全部" else int(fy)
         report_view = st.selectbox("選擇報表", ["全案總表", "人事成本", "在職年統計", "個人所得"], key="report_view")
@@ -893,7 +937,7 @@ with tab_report:
             )
 
         if report_view == "全案總表":
-            case_df = build_case_total_frame(df_all, filter_year)
+            case_df = build_case_total_frame(df_report, filter_year)
             show_report_table(
                 case_df,
                 CASE_TOTAL_COLS,
@@ -908,7 +952,7 @@ with tab_report:
                 "比例(%) = 人事成本 ÷ 請款額1% × 100。"
             )
         elif report_view == "人事成本":
-            hr_df = build_hr_cost_frame(df_all, filter_year)
+            hr_df = build_hr_cost_frame(df_report, filter_year)
             show_report_table(
                 hr_df,
                 HR_COST_COLS,
@@ -918,7 +962,7 @@ with tab_report:
                 "hr_cost",
             )
         elif report_view == "在職年統計":
-            yearly_df = build_yearly_stat_frame(df_all)
+            yearly_df = build_yearly_stat_frame(df_report)
             show_report_table(
                 yearly_df,
                 YEARLY_STAT_COLS,
@@ -929,7 +973,7 @@ with tab_report:
             )
             st.caption("資料條件：人事成本中的「薪資 + 獎金」。")
         else:
-            income_df = build_personal_income_frame(df_all, filter_year)
+            income_df = build_personal_income_frame(df_report, filter_year)
             show_report_table(
                 income_df,
                 PERSONAL_INCOME_COLS,

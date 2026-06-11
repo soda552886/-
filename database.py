@@ -56,10 +56,10 @@ def save_import_records(
     source_type: str,
     file_name: str,
     records: Iterable[dict],
-) -> int:
+) -> tuple[int, int]:
     rows = list(records)
     if not rows:
-        return 0
+        return 0, 0
 
     with closing(get_connection()) as conn:
         cursor = conn.execute(
@@ -110,7 +110,7 @@ def save_import_records(
             ],
         )
         conn.commit()
-    return len(rows)
+    return len(rows), batch_id
 
 
 def list_payroll_records(
