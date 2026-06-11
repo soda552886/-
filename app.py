@@ -743,7 +743,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-3"
+APP_VERSION = "20260524-4"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -798,7 +798,7 @@ with tab_import:
             key="download_hr_import_template",
         )
     with col_hint:
-        st.info("項目＝薪資/三節/獎金/員工福利；保費＝健保/二代；稅款＝所得稅/執行業務所得。")
+        st.info("項目＝薪資/三節/獎金/員工福利；保費＝健保/二代；稅款（或稅務）＝所得稅/執行業務所得。")
 
     uploader_key = st.session_state.get("upload_hr_detail_key", 0)
     detail_file = st.file_uploader(

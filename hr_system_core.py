@@ -537,7 +537,7 @@ def parse_import_row_taxes(row: pd.Series) -> tuple[float, float, float]:
     business = to_number(row.get("執行業務所得")) if "執行業務所得" in row.index else 0.0
     health2 = to_number(row.get("二代健保")) if "二代健保" in row.index else 0.0
 
-    tax_raw = clean_text(row.get("稅款"))
+    tax_raw = import_row_tax_label(row)
     tax_amount = to_number(row.get("稅款金額"))
     if tax_amount > 0:
         kind = normalize_tax_type(tax_raw)
@@ -545,6 +545,9 @@ def parse_import_row_taxes(row: pd.Series) -> tuple[float, float, float]:
             income_tax = tax_amount
         elif kind == "執行業務所得":
             business = tax_amount
+        elif tax_raw:
+            # 有稅別文字但無法辨識時，不預設塞進所得稅
+            pass
 
     ins_type = normalize_insurance_type(row.get("保費"))
     ins_amount = to_number(row.get("保費金額"))
@@ -578,9 +581,27 @@ def _clean_import_col(name: object) -> str:
     return clean_text(name).replace("\n", "")
 
 
+TAX_LABEL_ALIASES = {"稅務", "稅別", "稅種", "稅目"}
+
+
+def _canonical_import_col(col: str) -> str:
+    if col in TAX_LABEL_ALIASES:
+        return "稅款"
+    return col
+
+
+def import_row_tax_label(row: pd.Series) -> str:
+    for key in ("稅款", "稅務", "稅別", "稅種", "稅目"):
+        if key in row.index:
+            text = clean_text(row.get(key))
+            if text:
+                return text
+    return ""
+
+
 def _rename_hr_import_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    raw = [_clean_import_col(c) for c in out.columns]
+    raw = [_canonical_import_col(_clean_import_col(c)) for c in out.columns]
     new_cols: list[str] = []
     amount_idx = 0
     for i, col in enumerate(raw):
@@ -746,7 +767,7 @@ def parse_hr_detail_dataframe(df: pd.DataFrame) -> tuple[list[dict], pd.DataFram
                 "勞退": parse_note_number(record["note"], "勞退"),
                 "保費": clean_text(row.get("保費")),
                 "保費金額": to_number(row.get("保費金額")),
-                "稅款": clean_text(row.get("稅款")),
+                "稅款": import_row_tax_label(row),
                 "稅款金額": to_number(row.get("稅款金額")),
                 "所得稅": parse_note_number(record["note"], "所得稅"),
                 "執行業務所得": parse_note_number(record["note"], "執行業務所得"),
