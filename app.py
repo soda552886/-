@@ -44,6 +44,7 @@ from hr_system_core import (
     build_yearly_stat_frame,
     calc_hr_ratio,
     calc_request_pct,
+    delete_legacy_data,
     build_hr_import_template_bytes,
     parse_hr_detail_workbook,
     parse_hr_system_workbook,
@@ -1230,6 +1231,35 @@ with tab_query:
 with tab_batches:
     st.subheader("匯入批次紀錄")
     st.caption("可刪除單一批次（該次上傳的全部資料）；不影響其他批次或手動新增的資料。")
+
+    st.markdown("#### 刪除先前匯入的舊資料")
+    st.info(
+        "若你要刪的是早期匯入的薪資占比、個人所得、薪資獎金統計等，請用下方「刪除舊版格式資料」。"
+        "若只要刪某一次上傳的 Excel，請在下方批次列表選該批刪除。"
+    )
+    col_legacy, col_source = st.columns(2)
+    with col_legacy:
+        confirm_legacy = st.checkbox("確認刪除舊版格式", key="confirm_delete_legacy_batch_tab")
+        if st.button("刪除舊版格式資料", disabled=not confirm_legacy, key="delete_legacy_batch_tab"):
+            deleted, stats = delete_legacy_data()
+            if deleted:
+                st.success(f"已刪除 {deleted} 筆舊版資料。")
+                if stats:
+                    st.json(stats)
+            else:
+                st.info("沒有舊版格式資料。")
+            st.rerun()
+    with col_source:
+        all_recs = list_payroll_records(limit=100000)
+        source_types = sorted({str(dict(r)["source_type"]) for r in all_recs}) if all_recs else []
+        if source_types:
+            del_source = st.selectbox("依來源類型刪除", source_types, key="delete_by_source_select")
+            confirm_src = st.checkbox("確認刪除此來源", key="confirm_delete_source")
+            if st.button("刪除此來源全部", disabled=not confirm_src, key="delete_by_source_btn"):
+                n = delete_records_by_source(del_source)
+                st.success(f"已刪除來源「{del_source}」共 {n} 筆。")
+                st.rerun()
+
     batches = list_batches()
     if batches:
         batch_df = pd.DataFrame([dict(r) for r in batches])
