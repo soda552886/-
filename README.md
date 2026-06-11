@@ -42,7 +42,12 @@ streamlit run app.py
 
 - 環境變數 `DB_PATH`（Render 預設 `/var/data/financial_reports.db`）
 
-### 資料過幾小時不見？
+### 資料過幾小時不見？或舊資料又跑出來？
+
+**兩件事常同時發生：**
+
+1. **新資料不見**：Render 免費版會休眠，且**不支援持久化磁碟**，暫存區重啟後新寫入的資料會消失。
+2. **舊資料又出現**：若 `financial_reports.db` 曾被 commit 進 GitHub，每次 **Deploy / Rollback** 會把 repo 裡那份舊資料庫一起部署上來（已從 Git 移除追蹤，請重新部署一次）。
 
 Render 免費版會休眠；若**沒有掛 Persistent Disk**，SQLite 寫在暫存目錄，重啟後資料會清空。
 
