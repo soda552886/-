@@ -74,6 +74,11 @@ LEGACY_CASE_SOURCES = {"薪資占比", "總表主表手動", "總表主表調整
 LEGACY_HR_SOURCES = {"個人所得", "個人所得手動", "薪資獎金統計", "在職年手動", "在職年調整"}
 NEW_CASE_SOURCES = {"全案總表", "全案總表手動", "全案總表調整"}
 NEW_HR_SOURCES = {"人事成本", "人事成本手動", "人事成本調整"}
+REPORT_VISIBLE_SOURCES = NEW_CASE_SOURCES | NEW_HR_SOURCES
+
+
+def is_report_visible_source(source_type: object) -> bool:
+    return str(source_type or "") in REPORT_VISIBLE_SOURCES
 
 
 def to_number(value: object) -> float:
@@ -190,6 +195,25 @@ def delete_legacy_data() -> tuple[int, dict[str, int]]:
         deleted = delete_records_by_source_like(pattern)
         if deleted:
             stats[pattern] = deleted
+            total += deleted
+    return total, stats
+
+
+def delete_non_report_data() -> tuple[int, dict[str, int]]:
+    """刪除不會出現在報表的舊來源（如總表分表匯入、薪資占比、legacy_migration）。"""
+    from database import delete_records_by_source, get_connection
+    from contextlib import closing
+
+    stats: dict[str, int] = {}
+    total = 0
+    with closing(get_connection()) as conn:
+        types = [str(r[0]) for r in conn.execute("SELECT DISTINCT source_type FROM payroll_records").fetchall()]
+    for source_type in types:
+        if is_report_visible_source(source_type):
+            continue
+        deleted = delete_records_by_source(source_type)
+        if deleted:
+            stats[source_type] = deleted
             total += deleted
     return total, stats
 

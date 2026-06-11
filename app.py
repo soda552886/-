@@ -44,32 +44,14 @@ from hr_system_core import (
     build_yearly_stat_frame,
     calc_hr_ratio,
     calc_request_pct,
-    delete_legacy_data,
+    delete_non_report_data,
+    is_report_visible_source,
     build_hr_import_template_bytes,
     parse_hr_detail_workbook,
     parse_hr_system_workbook,
     parse_note_number,
     roc_year_from_value,
 )
-
-
-def filter_df_by_batch(df_all: pd.DataFrame, batch_key: object) -> pd.DataFrame:
-    if df_all.empty or "batch_id" not in df_all.columns:
-        return df_all
-    if batch_key is None:
-        return df_all
-    if batch_key == "latest":
-        latest_id = df_all["batch_id"].max()
-        return df_all[df_all["batch_id"] == latest_id].copy()
-    return df_all[df_all["batch_id"] == int(batch_key)].copy()
-
-
-def build_batch_filter_options(batches: list) -> dict[str, object]:
-    options: dict[str, object] = {"全部（各批次加總，含舊資料）": None, "僅最新一批": "latest"}
-    for b in batches:
-        label = f"批次 #{b['id']}｜{b['file_name']}｜{b['row_count']}筆"
-        options[label] = int(b["id"])
-    return options
 
 
 def format_currency_df(
@@ -827,10 +809,7 @@ with tab_import:
             batch_name = st.session_state.get("hr_detail_import_filename", "hr_detail_import")
             total, batch_id = save_import_records("人事成本", batch_name, detail_records)
             st.success(f"匯入成功：批次 #{batch_id}，共 {total} 筆。")
-            st.info(
-                f"本次資料在「資料查詢」序號較大屬正常。若報表仍像舊資料，請到「匯入紀錄」刪除舊批次，"
-                f"或「報表呈現」改選「僅最新一批」/「批次 #{batch_id}」。"
-            )
+            st.info(f"本次為批次 #{batch_id}。若報表空白，請確認「匯入紀錄」已刪除舊的「總表分表匯入」等資料。")
             for key in (
                 "hr_detail_import_records",
                 "hr_detail_import_preview",
@@ -878,17 +857,12 @@ with tab_report:
         st.info("目前沒有資料，請先到「匯入資料」上傳「人事成本系統.xlsx」。")
     else:
         df_all = pd.DataFrame([dict(r) for r in records])
-        batch_list = list_batches(limit=500)
-        batch_options = build_batch_filter_options([dict(b) for b in batch_list])
-        bf_label = st.selectbox("資料批次", list(batch_options.keys()), key="report_batch_filter")
-        df_report = filter_df_by_batch(df_all, batch_options[bf_label])
-        if batch_options[bf_label] is None:
-            st.caption(
-                "目前為「全部」：會把每一批匯入加總（序號小的舊資料 + 序號大的新資料）。"
-                "若只要看這次上傳，請改選「僅最新一批」或指定批次。"
+        hidden_count = int((~df_all["source_type"].map(is_report_visible_source)).sum())
+        if hidden_count:
+            st.warning(
+                f"資料庫有 {hidden_count} 筆舊格式（如「總表分表匯入」）不會出現在報表。"
+                "請到「匯入紀錄」按「刪除報表不顯示的舊資料」，或刪除批次 #7。"
             )
-        else:
-            st.info(f"目前只計算所選批次，共 {len(df_report)} 筆原始資料。")
         fy = st.selectbox("篩選年度", ["全部", *YEAR_OPTIONS], key="report_filter_year")
         filter_year = None if fy == "全部" else int(fy)
         report_view = st.selectbox("選擇報表", ["全案總表", "人事成本", "在職年統計", "個人所得"], key="report_view")
@@ -938,7 +912,7 @@ with tab_report:
             )
 
         if report_view == "全案總表":
-            case_df = build_case_total_frame(df_report, filter_year)
+            case_df = build_case_total_frame(df_all, filter_year)
             show_report_table(
                 case_df,
                 CASE_TOTAL_COLS,
@@ -953,7 +927,7 @@ with tab_report:
                 "比例(%) = 人事成本 ÷ 請款額1% × 100。"
             )
         elif report_view == "人事成本":
-            hr_df = build_hr_cost_frame(df_report, filter_year)
+            hr_df = build_hr_cost_frame(df_all, filter_year)
             show_report_table(
                 hr_df,
                 HR_COST_COLS,
@@ -963,7 +937,7 @@ with tab_report:
                 "hr_cost",
             )
         elif report_view == "在職年統計":
-            yearly_df = build_yearly_stat_frame(df_report)
+            yearly_df = build_yearly_stat_frame(df_all)
             show_report_table(
                 yearly_df,
                 YEARLY_STAT_COLS,
@@ -974,7 +948,7 @@ with tab_report:
             )
             st.caption("資料條件：人事成本中的「薪資 + 獎金」。")
         else:
-            income_df = build_personal_income_frame(df_report, filter_year)
+            income_df = build_personal_income_frame(df_all, filter_year)
             show_report_table(
                 income_df,
                 PERSONAL_INCOME_COLS,
@@ -1179,6 +1153,12 @@ with tab_query:
     rows = list_payroll_records(keyword=keyword, source_type=source_type, roc_year=roc_year, limit=100000)
     if rows:
         df = pd.DataFrame([dict(r) for r in rows])
+        hidden = df[~df["source_type"].map(is_report_visible_source)]
+        if not hidden.empty:
+            st.warning(
+                f"有 {len(hidden)} 筆來源為「{', '.join(sorted(hidden['source_type'].unique()))}」—"
+                "這類舊資料不會出現在報表，可到「匯入紀錄」刪除。"
+            )
         edit_cols = [
             "id",
             "batch_id",
@@ -1232,33 +1212,21 @@ with tab_batches:
     st.subheader("匯入批次紀錄")
     st.caption("可刪除單一批次（該次上傳的全部資料）；不影響其他批次或手動新增的資料。")
 
-    st.markdown("#### 刪除先前匯入的舊資料")
+    st.markdown("#### 刪除舊資料")
     st.info(
-        "若你要刪的是早期匯入的薪資占比、個人所得、薪資獎金統計等，請用下方「刪除舊版格式資料」。"
-        "若只要刪某一次上傳的 Excel，請在下方批次列表選該批刪除。"
+        "「總表分表匯入」等舊格式只會出現在資料查詢，**不會進報表**。"
+        "你的截圖 batch_id=7、來源=總表分表匯入 就是這種，請用下方按鈕刪除。"
     )
-    col_legacy, col_source = st.columns(2)
-    with col_legacy:
-        confirm_legacy = st.checkbox("確認刪除舊版格式", key="confirm_delete_legacy_batch_tab")
-        if st.button("刪除舊版格式資料", disabled=not confirm_legacy, key="delete_legacy_batch_tab"):
-            deleted, stats = delete_legacy_data()
-            if deleted:
-                st.success(f"已刪除 {deleted} 筆舊版資料。")
-                if stats:
-                    st.json(stats)
-            else:
-                st.info("沒有舊版格式資料。")
-            st.rerun()
-    with col_source:
-        all_recs = list_payroll_records(limit=100000)
-        source_types = sorted({str(dict(r)["source_type"]) for r in all_recs}) if all_recs else []
-        if source_types:
-            del_source = st.selectbox("依來源類型刪除", source_types, key="delete_by_source_select")
-            confirm_src = st.checkbox("確認刪除此來源", key="confirm_delete_source")
-            if st.button("刪除此來源全部", disabled=not confirm_src, key="delete_by_source_btn"):
-                n = delete_records_by_source(del_source)
-                st.success(f"已刪除來源「{del_source}」共 {n} 筆。")
-                st.rerun()
+    confirm_hidden = st.checkbox("確認刪除報表不顯示的舊資料", key="confirm_delete_hidden")
+    if st.button("刪除報表不顯示的舊資料", type="primary", disabled=not confirm_hidden, key="delete_hidden_btn"):
+        deleted, stats = delete_non_report_data()
+        if deleted:
+            st.success(f"已刪除 {deleted} 筆（含總表分表匯入等）。")
+            if stats:
+                st.json(stats)
+        else:
+            st.info("沒有需要刪除的舊資料。")
+        st.rerun()
 
     batches = list_batches()
     if batches:
