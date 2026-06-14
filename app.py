@@ -20,7 +20,6 @@ from database import (
     delete_payroll_records,
     delete_records_by_source,
     init_db,
-    is_persistent_db,
     list_batches,
     list_payroll_records,
     save_import_records,
@@ -743,7 +742,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-4"
+APP_VERSION = "20260524-5"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -755,23 +754,7 @@ with st.sidebar:
     st.text(f"紀錄：{record_count} 筆")
     st.text(f"批次：{batch_count} 筆")
     st.caption(f"路徑：{DB_PATH}")
-    if os.getenv("RENDER"):
-        if is_persistent_db():
-            st.success("資料存放在持久化磁碟（重啟不會消失）")
-        else:
-            st.error(
-                "資料未放在持久化磁碟！網站休眠或重新部署後，資料可能全部消失。"
-                "請到 Render → 服務 → Disks 掛載 /var/data，"
-                "並設定環境變數 DB_PATH=/var/data/financial_reports.db"
-            )
-    elif not Path(DB_PATH).exists() and record_count == 0:
-        st.info("本機資料庫，尚未有資料。")
 
-if os.getenv("RENDER") and not is_persistent_db():
-    st.error(
-        "⚠️ 雲端資料庫未掛載持久化磁碟，這是「過幾小時資料不見」最常見的原因。"
-        "請立即到 Render 設定 Disk（掛載路徑 /var/data）與 DB_PATH，並定期在「匯入紀錄」下載備份。"
-    )
 local_ip = get_local_ip()
 with st.expander("跨裝置開啟網站"):
     st.write("在同一個 Wi-Fi/區網下，請用以下方式啟動：")
@@ -985,8 +968,8 @@ with tab_report:
                 "personal_income",
             )
             st.caption(
-                "每筆人事成本一列（不與舊批次合併）；金額 = 薪資 + 獎金；"
-                "稅款欄請填「執行業務」或「所得稅」；刪除舊資料請到「匯入紀錄」刪除批次。"
+                "同一人、同一案場、同一日期會合併成一列；金額 = 薪資 + 獎金；"
+                "稅款欄請填「執行業務」或「所得稅」。"
             )
 
 with tab_manual:

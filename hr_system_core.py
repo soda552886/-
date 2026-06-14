@@ -650,6 +650,9 @@ def build_hr_cost_record(
     item_amounts = {name: 0.0 for name in HR_MANUAL_ITEM_OPTIONS}
     if item in item_amounts:
         item_amounts[item] = float(item_amount or 0)
+    elif float(item_amount or 0) > 0:
+        # 項目空白或非薪資/獎金/三節/員工福利時，金額仍計入薪資
+        item_amounts["薪資"] = float(item_amount or 0)
 
     ins_type = normalize_insurance_type(insurance_type)
     health = float(insurance_amount or 0) if ins_type == "健保" else 0.0
@@ -702,6 +705,8 @@ def _hr_detail_row_to_record(row: pd.Series) -> dict | None:
 
     item = clean_text(row.get("項目"))
     item_amount = to_number(row.get("項目金額"))
+    if not item and item_amount > 0:
+        item = "薪資"
     labor = to_number(row.get("勞保"))
     pension = to_number(row.get("勞退"))
     insurance_type = normalize_insurance_type(row.get("保費"))
@@ -1159,8 +1164,15 @@ def build_yearly_stat_frame(df_all: pd.DataFrame) -> pd.DataFrame:
     return out[["姓名", *year_cols, "總計"]]
 
 
+def _personal_income_gross(note: object, row: pd.Series | None = None) -> float:
+    gross = parse_note_number(note, "薪資") + parse_note_number(note, "獎金")
+    if gross <= 0 and row is not None:
+        gross = float(row.get("salary") or 0) + float(row.get("bonus") or 0)
+    return gross
+
+
 def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
-    rows: list[dict] = []
+    buckets: dict[tuple, dict] = {}
     if df_all.empty:
         return pd.DataFrame(columns=PERSONAL_INCOME_COLS)
 
@@ -1175,27 +1187,36 @@ def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = 
         if not name:
             continue
         note = row.get("note")
-        salary = parse_note_number(note, "薪資")
-        bonus = parse_note_number(note, "獎金")
-        amount = salary + bonus
+        amount = _personal_income_gross(note, row)
         income_tax, business_income, health2 = parse_tax_amounts_from_note(note)
         if amount <= 0 and income_tax == 0 and business_income == 0 and health2 == 0:
             continue
-        net = round(amount - income_tax - business_income - health2)
         date_text = parse_note_value(note, "date")
-        rows.append(
-            {
+        project = str(row.get("project_name") or "")
+        key = (yr, project, name, date_text)
+        if key not in buckets:
+            buckets[key] = {
                 "年度": yr,
-                "案場": str(row.get("project_name") or ""),
+                "案場": project,
                 "姓名": name,
                 "日期": date_text,
-                "金額": amount,
-                "所得稅": income_tax,
-                "執行業務所得": business_income,
-                "二代健保": health2,
-                "實領金額": net,
+                "金額": 0.0,
+                "所得稅": 0.0,
+                "執行業務所得": 0.0,
+                "二代健保": 0.0,
             }
+        entry = buckets[key]
+        entry["金額"] += amount
+        entry["所得稅"] += income_tax
+        entry["執行業務所得"] += business_income
+        entry["二代健保"] += health2
+
+    rows: list[dict] = []
+    for entry in buckets.values():
+        entry["實領金額"] = round(
+            entry["金額"] - entry["所得稅"] - entry["執行業務所得"] - entry["二代健保"]
         )
+        rows.append(entry)
 
     if not rows:
         return pd.DataFrame(columns=PERSONAL_INCOME_COLS)
