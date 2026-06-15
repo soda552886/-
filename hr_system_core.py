@@ -620,6 +620,18 @@ def _rename_hr_import_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _forward_fill_import_group_keys(df: pd.DataFrame) -> pd.DataFrame:
+    """Excel 合併儲存格時，姓名/日期等常只有第一列有值，向下沿用。"""
+    out = df.copy()
+    for col in ("年度", "案名", "姓名", "日期"):
+        if col not in out.columns:
+            continue
+        series = out[col].map(lambda x: clean_text(x) if not pd.isna(x) else "")
+        series = series.mask(series == "", pd.NA).ffill().fillna("")
+        out[col] = series
+    return out
+
+
 def is_hr_detail_import_df(df: pd.DataFrame) -> bool:
     if df.empty:
         return False
@@ -752,7 +764,7 @@ def _hr_detail_row_to_record(row: pd.Series) -> dict | None:
 
 
 def parse_hr_detail_dataframe(df: pd.DataFrame) -> tuple[list[dict], pd.DataFrame]:
-    renamed = _rename_hr_import_columns(df)
+    renamed = _forward_fill_import_group_keys(_rename_hr_import_columns(df))
     records: list[dict] = []
     preview_rows: list[dict] = []
     for _, row in renamed.iterrows():
@@ -1134,7 +1146,7 @@ def build_yearly_stat_frame(df_all: pd.DataFrame) -> pd.DataFrame:
         if yr is None:
             continue
         note = row.get("note")
-        amount = parse_note_number(note, "薪資") + parse_note_number(note, "獎金")
+        amount = sum(parse_note_number(note, key) for key in HR_MANUAL_ITEM_OPTIONS)
         if amount <= 0:
             amount = float(row.get("salary") or 0) + float(row.get("bonus") or 0)
         append_yearly(name, yr, amount)
@@ -1165,10 +1177,22 @@ def build_yearly_stat_frame(df_all: pd.DataFrame) -> pd.DataFrame:
 
 
 def _personal_income_gross(note: object, row: pd.Series | None = None) -> float:
-    gross = parse_note_number(note, "薪資") + parse_note_number(note, "獎金")
+    gross = sum(parse_note_number(note, key) for key in HR_MANUAL_ITEM_OPTIONS)
     if gross <= 0 and row is not None:
-        gross = float(row.get("salary") or 0) + float(row.get("bonus") or 0)
+        gross = (
+            float(row.get("salary") or 0)
+            + float(row.get("bonus") or 0)
+            + float(row.get("welfare") or 0)
+            + parse_note_number(note, "三節")
+        )
     return gross
+
+
+def _personal_income_date_key(note: object) -> str:
+    date_text = parse_note_value(note, "date")
+    if not date_text:
+        return ""
+    return parse_roc_date_text(date_text) or date_text.strip()
 
 
 def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
@@ -1191,15 +1215,14 @@ def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = 
         income_tax, business_income, health2 = parse_tax_amounts_from_note(note)
         if amount <= 0 and income_tax == 0 and business_income == 0 and health2 == 0:
             continue
-        date_text = parse_note_value(note, "date")
         project = str(row.get("project_name") or "")
-        key = (yr, project, name, date_text)
+        key = (yr, project, name, _personal_income_date_key(note))
         if key not in buckets:
             buckets[key] = {
                 "年度": yr,
                 "案場": project,
                 "姓名": name,
-                "日期": date_text,
+                "日期": _personal_income_date_key(note) or parse_note_value(note, "date"),
                 "金額": 0.0,
                 "所得稅": 0.0,
                 "執行業務所得": 0.0,

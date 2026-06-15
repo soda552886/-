@@ -742,7 +742,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-5"
+APP_VERSION = "20260524-6"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -968,8 +968,7 @@ with tab_report:
                 "personal_income",
             )
             st.caption(
-                "同一人、同一案場、同一日期會合併成一列；金額 = 薪資 + 獎金；"
-                "稅款欄請填「執行業務」或「所得稅」。"
+                "同一人、同一案場、同一日期會合併成一列；金額 = 薪資 + 三節 + 獎金 + 員工福利。"
             )
 
 with tab_manual:
