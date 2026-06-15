@@ -50,6 +50,9 @@ from hr_system_core import (
     is_report_visible_source,
     build_hr_import_template_bytes,
     parse_hr_detail_workbook,
+    parse_note_remark,
+    parse_note_value,
+    rebuild_note_display_fields,
     parse_hr_system_workbook,
     parse_note_number,
     roc_year_from_value,
@@ -742,7 +745,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-6"
+APP_VERSION = "20260524-7"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -962,14 +965,12 @@ with tab_report:
             show_report_table(
                 income_df,
                 PERSONAL_INCOME_COLS,
-                [c for c in PERSONAL_INCOME_COLS if c not in {"年度", "案場", "姓名", "日期"}],
+                [c for c in PERSONAL_INCOME_COLS if c not in {"年度", "案場", "姓名"}],
                 "個人所得",
                 "個人所得_匯出.xlsx",
                 "personal_income",
             )
-            st.caption(
-                "同一人、同一案場、同一日期會合併成一列；金額 = 薪資 + 三節 + 獎金 + 員工福利。"
-            )
+            st.caption("依「年度 + 案場 + 姓名」加總；金額 = 薪資 + 三節 + 獎金 + 員工福利。")
 
 with tab_manual:
     st.subheader("手動新增資料")
@@ -1147,6 +1148,7 @@ with tab_manual:
 
 with tab_query:
     st.subheader("已匯入資料查詢")
+    st.caption("逐筆顯示，不合併。")
     q1, q2, q3 = st.columns([2, 1, 1])
     with q1:
         keyword = st.text_input("關鍵字（姓名/公司/案場）", placeholder="輸入關鍵字")
@@ -1168,7 +1170,7 @@ with tab_query:
                 f"有 {len(hidden)} 筆來源為「{', '.join(sorted(hidden['source_type'].unique()))}」—"
                 "這類舊資料不會出現在報表，可到「匯入紀錄」刪除。"
             )
-        edit_cols = [
+        base_cols = [
             "id",
             "batch_id",
             "source_type",
@@ -1181,15 +1183,19 @@ with tab_query:
             "bonus",
             "welfare",
             "total_income",
-            "note",
         ]
-        editable_df = df[edit_cols].copy()
+        editable_df = df[base_cols].copy()
+        editable_df["獎項"] = df["note"].map(lambda n: parse_note_value(n, "獎項"))
+        editable_df["次數"] = df["note"].map(lambda n: parse_note_value(n, "次數") or "1")
+        editable_df["備註"] = df["note"].map(parse_note_remark)
+        note_by_id = df.set_index("id")["note"].to_dict()
         edited = st.data_editor(editable_df, use_container_width=True, hide_index=True, key="query_inline_editor")
         c1, c2 = st.columns(2)
         with c1:
             if st.button("儲存目前編輯", key="save_inline_edit"):
                 for _, row in edited.iterrows():
                     rid = int(row["id"])
+                    old_note = note_by_id.get(rid, "")
                     update_payroll_record(
                         rid,
                         {
@@ -1202,7 +1208,12 @@ with tab_query:
                             "bonus": float(row["bonus"] or 0),
                             "welfare": float(row["welfare"] or 0),
                             "total_income": float(row["total_income"] or 0),
-                            "note": "" if pd.isna(row["note"]) else str(row["note"]),
+                            "note": rebuild_note_display_fields(
+                                old_note,
+                                row["獎項"],
+                                row["次數"],
+                                row["備註"],
+                            ),
                         },
                     )
                 st.success("已儲存修改。")

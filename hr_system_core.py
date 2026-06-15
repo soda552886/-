@@ -44,12 +44,26 @@ CASE_TOTAL_COLS = [
 ]
 HR_COST_COLS = ["年度", "案場", "勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "總計"]
 YEARLY_STAT_COLS = ["姓名", "113年", "114年", "115年", "總計"]
-PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "日期", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
+PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
 
 CASE_NOTE_KEYS = ["總銷", "簽約金額", "銷售請款額", "請款額1%", "請款淨額", "營收", "營收(未進帳)"]
 CASE_OVERWRITE_FIELDS = {"總銷"}
 CASE_DELTA_FIELDS = {"營收(未進帳)"}
 HR_NOTE_KEYS = ["勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "所得稅", "執行業務所得"]
+
+_STRUCTURED_NOTE_KEYS = frozenset(
+    {
+        "date",
+        "field",
+        "category",
+        "migrated_from",
+        "legacy_id",
+        "獎項",
+        "次數",
+        "請款額1%",
+        *HR_NOTE_KEYS,
+    }
+)
 HR_COST_SUM_KEYS = ["勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利"]
 HR_IMPORT_DISPLAY_COLS = [
     "年度",
@@ -111,6 +125,53 @@ def parse_note_value(note: object, key: str) -> str:
 
 def parse_note_number(note: object, key: str) -> float:
     return to_number(parse_note_value(note, key))
+
+
+def parse_note_remark(note: object) -> str:
+    """取出 note 中非結構化欄位的備註文字。"""
+    text = "" if pd.isna(note) else str(note)
+    if not text.strip():
+        return ""
+    parts: list[str] = []
+    for segment in text.split(";"):
+        seg = segment.strip()
+        if not seg:
+            continue
+        if ":" in seg:
+            key = seg.split(":", 1)[0].strip()
+            if key in _STRUCTURED_NOTE_KEYS:
+                continue
+        parts.append(seg)
+    return ";".join(parts)
+
+
+def rebuild_note_display_fields(
+    note: object,
+    award: object,
+    times: object,
+    remark: object,
+) -> str:
+    text = "" if pd.isna(note) else str(note)
+    kept: list[str] = []
+    for segment in text.split(";"):
+        seg = segment.strip()
+        if not seg:
+            continue
+        if seg.startswith("獎項:") or seg.startswith("次數:"):
+            continue
+        if ":" in seg:
+            key = seg.split(":", 1)[0].strip()
+            if key in _STRUCTURED_NOTE_KEYS:
+                kept.append(seg)
+    award_text = clean_text(award)
+    times_text = clean_text(times) or parse_note_value(text, "次數") or "1"
+    remark_text = clean_text(remark)
+    if award_text:
+        kept.append(f"獎項:{award_text}")
+    kept.append(f"次數:{times_text}")
+    if remark_text:
+        kept.append(remark_text)
+    return ";".join(kept)
 
 
 def roc_year_from_value(value: object) -> int | None:
@@ -1188,13 +1249,6 @@ def _personal_income_gross(note: object, row: pd.Series | None = None) -> float:
     return gross
 
 
-def _personal_income_date_key(note: object) -> str:
-    date_text = parse_note_value(note, "date")
-    if not date_text:
-        return ""
-    return parse_roc_date_text(date_text) or date_text.strip()
-
-
 def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
     buckets: dict[tuple, dict] = {}
     if df_all.empty:
@@ -1216,13 +1270,12 @@ def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = 
         if amount <= 0 and income_tax == 0 and business_income == 0 and health2 == 0:
             continue
         project = str(row.get("project_name") or "")
-        key = (yr, project, name, _personal_income_date_key(note))
+        key = (yr, project, name)
         if key not in buckets:
             buckets[key] = {
                 "年度": yr,
                 "案場": project,
                 "姓名": name,
-                "日期": _personal_income_date_key(note) or parse_note_value(note, "date"),
                 "金額": 0.0,
                 "所得稅": 0.0,
                 "執行業務所得": 0.0,
@@ -1244,4 +1297,4 @@ def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = 
     if not rows:
         return pd.DataFrame(columns=PERSONAL_INCOME_COLS)
     out = pd.DataFrame(rows)
-    return out.sort_values(["年度", "案場", "姓名", "日期"], na_position="last")[PERSONAL_INCOME_COLS]
+    return out.sort_values(["年度", "案場", "姓名"], na_position="last")[PERSONAL_INCOME_COLS]
