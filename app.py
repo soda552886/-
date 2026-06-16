@@ -32,11 +32,14 @@ from hr_system_core import (
     CASE_OVERWRITE_FIELDS,
     CASE_TOTAL_COLS,
     COMPANY_OPTIONS,
+    HQ_CASE_FIELD_OPTIONS,
+    HEADQUARTERS_PROJECT,
     HR_COST_COLS,
     HR_ITEM_OPTIONS,
     HR_MANUAL_ITEM_OPTIONS,
     PERSONAL_INCOME_COLS,
     PROJECT_OPTIONS,
+    SITE_PROJECT_OPTIONS,
     YEARLY_STAT_COLS,
     YEAR_OPTIONS,
     append_note_parts,
@@ -46,6 +49,7 @@ from hr_system_core import (
     build_yearly_stat_frame,
     calc_hr_ratio,
     calc_request_pct,
+    hq_revenue_base,
     delete_non_report_data,
     is_report_visible_source,
     build_hr_import_template_bytes,
@@ -745,7 +749,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-7"
+APP_VERSION = "20260524-8"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -888,6 +892,7 @@ with tab_report:
             file_name: str,
             key: str,
             percent_cols: list[str] | None = None,
+            ratio_mode: str = "site",
         ) -> None:
             percent_cols = percent_cols or []
             if df.empty:
@@ -901,10 +906,17 @@ with tab_report:
                 display_df[c] = pd.to_numeric(display_df[c], errors="coerce").fillna(0.0)
             sum_cols = [c for c in num_cols if c not in percent_cols]
             total_kwargs: dict = {c: float(display_df[c].sum()) for c in sum_cols}
-            if "比例" in percent_cols and "人事成本" in display_df.columns and "請款額1%" in display_df.columns:
+            if "比例" in percent_cols and "人事成本" in display_df.columns:
                 hr_sum = float(display_df["人事成本"].sum())
-                req_sum = float(display_df["請款額1%"].sum())
-                total_kwargs["比例"] = calc_hr_ratio(hr_sum, req_sum) if req_sum > 0 else 0.0
+                if ratio_mode == "hq":
+                    den = hq_revenue_base(
+                        float(display_df["營收"].sum()) if "營收" in display_df.columns else 0.0,
+                        float(display_df["營收(未進帳)"].sum()) if "營收(未進帳)" in display_df.columns else 0.0,
+                    )
+                    total_kwargs["比例"] = calc_hr_ratio(hr_sum, den) if den > 0 else 0.0
+                elif "請款額1%" in display_df.columns:
+                    req_sum = float(display_df["請款額1%"].sum())
+                    total_kwargs["比例"] = calc_hr_ratio(hr_sum, req_sum) if req_sum > 0 else 0.0
             text_cols = [c for c in shown if c not in num_cols]
             if text_cols:
                 total_kwargs[text_cols[0]] = "合計"
@@ -926,18 +938,34 @@ with tab_report:
 
         if report_view == "全案總表":
             case_df = build_case_total_frame(df_all, filter_year)
+            site_df = case_df[case_df["案場"] != HEADQUARTERS_PROJECT].copy()
+            hq_df = case_df[case_df["案場"] == HEADQUARTERS_PROJECT].copy()
             show_report_table(
-                case_df,
+                site_df,
                 CASE_TOTAL_COLS,
                 [c for c in CASE_TOTAL_COLS if c not in {"年度", "公司名", "案場"}],
-                "全案總表",
-                "全案總表_匯出.xlsx",
-                "case_total",
+                "全案總表（案場）",
+                "全案總表_案場_匯出.xlsx",
+                "case_total_site",
                 percent_cols=["比例"],
+                ratio_mode="site",
             )
             st.caption(
-                "人事成本由人事成本資料帶入（僅匯入人事成本時也會顯示）；"
-                "比例(%) = 人事成本 ÷ 請款額1% × 100。"
+                "案場比例(%) = 人事成本 ÷ 請款額1% × 100；人事成本由人事成本資料帶入。"
+            )
+            st.markdown("#### 總公司")
+            show_report_table(
+                hq_df,
+                CASE_TOTAL_COLS,
+                [c for c in CASE_TOTAL_COLS if c not in {"年度", "公司名", "案場"}],
+                "全案總表（總公司）",
+                "全案總表_總公司_匯出.xlsx",
+                "case_total_hq",
+                percent_cols=["比例"],
+                ratio_mode="hq",
+            )
+            st.caption(
+                "總公司比例(%) = 人事成本 ÷ (營收 + 營收(未進帳)) × 100。"
             )
         elif report_view == "人事成本":
             hr_df = build_hr_cost_frame(df_all, filter_year)
@@ -985,10 +1013,10 @@ with tab_manual:
             with c2:
                 case_company = st.selectbox("公司名", COMPANY_OPTIONS, key="m_case_company")
             with c3:
-                case_project = st.selectbox("案名", PROJECT_OPTIONS, key="m_case_project")
+                case_project = st.selectbox("案名", SITE_PROJECT_OPTIONS, key="m_case_project")
             with c4:
                 case_date = st.date_input("日期", key="m_case_date")
-            c5, c6, c7 = st.columns(3)
+            c5, c6, c7, c8 = st.columns(4)
             with c5:
                 case_field = st.selectbox("項目", CASE_FIELD_OPTIONS, key="m_case_field")
             with c6:
@@ -998,13 +1026,15 @@ with tab_manual:
                     case_op = st.radio("操作", ["增加", "扣除（入帳）"], horizontal=True, key="m_case_op")
                 else:
                     case_op = "增加"
+            with c8:
+                case_remark = st.text_input("備註", key="m_case_remark")
             if case_field == "總銷":
                 st.caption("總銷採覆蓋：新金額會取代舊值，不會累加。")
             elif case_field in CASE_DELTA_FIELDS:
                 st.caption("營收(未進帳)可累加；選「扣除」代表入帳後減少未進帳金額。")
             if case_field == "銷售請款額" and case_amount > 0:
                 st.info(f"請款額1% 自動帶入：{calc_request_pct(case_amount):,.0f}")
-            submit_case = st.form_submit_button("新增全案總表資料")
+            submit_case = st.form_submit_button("新增全案總表資料（案場）")
         if submit_case:
             signed_amount = float(case_amount)
             if case_field in CASE_DELTA_FIELDS and case_op.startswith("扣除"):
@@ -1027,6 +1057,8 @@ with tab_manual:
                 note_parts = [f"date:{case_date.isoformat()}", f"field:{case_field}", f"{case_field}:{signed_amount}"]
             if case_field == "銷售請款額":
                 note_parts.append(f"請款額1%:{calc_request_pct(abs(case_amount))}")
+            if case_remark.strip():
+                note_parts.append(case_remark.strip())
             save_import_records(
                 "全案總表手動",
                 "manual_case",
@@ -1043,7 +1075,66 @@ with tab_manual:
                     "note": append_note_parts(note_parts),
                 }],
             )
-            st.success("已新增全案總表資料。")
+            st.success("已新增全案總表資料（案場）。")
+            st.rerun()
+
+        st.markdown("#### 總公司")
+        st.caption("總公司比例依「營收 + 營收(未進帳)」計算，不使用請款額1%。")
+        with st.form("manual_hq_case_form", clear_on_submit=True):
+            h1, h2, h3, h4 = st.columns(4)
+            with h1:
+                hq_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_hq_year")
+            with h2:
+                hq_company = st.selectbox("公司名", COMPANY_OPTIONS, key="m_hq_company")
+            with h3:
+                hq_date = st.date_input("日期", key="m_hq_date")
+            with h4:
+                hq_remark = st.text_input("備註", key="m_hq_remark")
+            h5, h6, h7 = st.columns(3)
+            with h5:
+                hq_field = st.selectbox("項目", HQ_CASE_FIELD_OPTIONS, key="m_hq_field")
+            with h6:
+                hq_amount = st.number_input("金額", min_value=0.0, step=1000.0, format="%.0f", key="m_hq_amount")
+            with h7:
+                if hq_field in CASE_DELTA_FIELDS:
+                    hq_op = st.radio("操作", ["增加", "扣除（入帳）"], horizontal=True, key="m_hq_op")
+                else:
+                    hq_op = "增加"
+            if hq_field in CASE_DELTA_FIELDS:
+                st.caption("營收(未進帳)可累加；選「扣除」代表入帳後減少未進帳金額。")
+            submit_hq = st.form_submit_button(f"新增全案總表資料（{HEADQUARTERS_PROJECT}）")
+        if submit_hq:
+            signed_amount = float(hq_amount)
+            if hq_field in CASE_DELTA_FIELDS and hq_op.startswith("扣除"):
+                signed_amount = -abs(signed_amount)
+            if hq_field in CASE_DELTA_FIELDS:
+                note_parts = [
+                    f"date:{hq_date.isoformat()}",
+                    "mode:delta",
+                    f"field:{hq_field}",
+                    f"{hq_field}:{signed_amount}",
+                ]
+            else:
+                note_parts = [f"date:{hq_date.isoformat()}", f"field:{hq_field}", f"{hq_field}:{signed_amount}"]
+            if hq_remark.strip():
+                note_parts.append(hq_remark.strip())
+            save_import_records(
+                "全案總表手動",
+                "manual_hq_case",
+                [{
+                    "sheet_name": "全案總表",
+                    "employee_name": None,
+                    "company_name": hq_company,
+                    "project_name": HEADQUARTERS_PROJECT,
+                    "roc_year": int(hq_year),
+                    "salary": 0.0,
+                    "bonus": 0.0,
+                    "welfare": 0.0,
+                    "total_income": 0.0,
+                    "note": append_note_parts(note_parts),
+                }],
+            )
+            st.success(f"已新增全案總表資料（{HEADQUARTERS_PROJECT}）。")
             st.rerun()
 
     with mtab2:
@@ -1251,18 +1342,38 @@ with tab_batches:
     batches = list_batches()
     if batches:
         batch_df = pd.DataFrame([dict(r) for r in batches])
-        st.dataframe(batch_df, use_container_width=True, hide_index=True)
+        batch_search = st.text_input(
+            "搜尋批次（編號 / 來源 / 檔名）",
+            placeholder="例如 11、人事成本、xlsx",
+            key="batch_search",
+        )
+        if batch_search.strip():
+            q = batch_search.strip().lower()
+            mask = batch_df.astype(str).apply(
+                lambda row: any(q in str(v).lower() for v in row),
+                axis=1,
+            )
+            batch_df = batch_df[mask]
+            if batch_df.empty:
+                st.info("查無符合的匯入批次。")
+        if not batch_df.empty:
+            st.dataframe(batch_df, use_container_width=True, hide_index=True)
         batch_options = {
             f"#{b['id']}｜{b['source_type']}｜{b['file_name']}｜{b['row_count']}筆｜{b['imported_at']}": int(b["id"])
             for b in batches
+            if not batch_search.strip()
+            or batch_search.strip().lower() in f"#{b['id']} {b['source_type']} {b['file_name']}".lower()
         }
-        selected_label = st.selectbox("選擇要刪除的批次", list(batch_options.keys()), key="delete_batch_select")
-        confirm_batch = st.checkbox("確認刪除此批次", key="confirm_delete_batch")
-        if st.button("刪除此批次", type="primary", disabled=not confirm_batch, key="delete_batch_btn"):
-            bid = batch_options[selected_label]
-            deleted_records, deleted_batches = delete_import_batch(bid)
-            st.success(f"已刪除批次 #{bid}：{deleted_records} 筆資料。")
-            st.rerun()
+        if batch_options:
+            selected_label = st.selectbox("選擇要刪除的批次", list(batch_options.keys()), key="delete_batch_select")
+            confirm_batch = st.checkbox("確認刪除此批次", key="confirm_delete_batch")
+            if st.button("刪除此批次", type="primary", disabled=not confirm_batch, key="delete_batch_btn"):
+                bid = batch_options[selected_label]
+                deleted_records, deleted_batches = delete_import_batch(bid)
+                st.success(f"已刪除批次 #{bid}：{deleted_records} 筆資料。")
+                st.rerun()
+        elif batch_search.strip():
+            st.info("查無符合的匯入批次可刪除。")
     else:
         st.info("尚無匯入紀錄。")
 

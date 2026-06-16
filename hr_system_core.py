@@ -23,6 +23,9 @@ PROJECT_OPTIONS = [
     "商用不動產",
     "總公司",
 ]
+HEADQUARTERS_PROJECT = "總公司"
+SITE_PROJECT_OPTIONS = [p for p in PROJECT_OPTIONS if p != HEADQUARTERS_PROJECT]
+HQ_CASE_FIELD_OPTIONS = ["營收", "營收(未進帳)"]
 CASE_FIELD_OPTIONS = ["總銷", "簽約金額", "銷售請款額", "請款淨額", "營收", "營收(未進帳)"]
 HR_ITEM_OPTIONS = ["勞保", "勞退", "健保", "二代", "所得稅", "執行業務所得", "薪資", "三節", "獎金", "員工福利"]
 HR_MANUAL_ITEM_OPTIONS = ["薪資", "三節", "獎金", "員工福利"]
@@ -194,6 +197,35 @@ def calc_hr_ratio(hr_cost: float, request_pct: float) -> float:
     if request_pct <= 0:
         return 0.0
     return round((hr_cost / request_pct) * 100, 4)
+
+
+def is_headquarters_project(project: object) -> bool:
+    return clean_text(project) == HEADQUARTERS_PROJECT
+
+
+def hq_revenue_base(revenue: float, revenue_pending: float) -> float:
+    return float(revenue or 0) + float(revenue_pending or 0)
+
+
+def calc_hq_hr_ratio(hr_cost: float, revenue: float, revenue_pending: float) -> float:
+    base = hq_revenue_base(revenue, revenue_pending)
+    if base <= 0:
+        return 0.0
+    return round((float(hr_cost or 0) / base) * 100, 4)
+
+
+def case_row_hr_ratio(row: pd.Series | dict) -> float:
+    hr_cost = float(row.get("人事成本") or 0)
+    if is_headquarters_project(row.get("案場")):
+        return calc_hq_hr_ratio(
+            hr_cost,
+            float(row.get("營收") or 0),
+            float(row.get("營收(未進帳)") or 0),
+        )
+    request_pct = float(row.get("請款額1%") or 0)
+    if request_pct > 0:
+        return calc_hr_ratio(hr_cost, request_pct)
+    return float(row.get("比例") or 0)
 
 
 def parse_year_amounts(note: object) -> dict[str, float]:
@@ -1106,7 +1138,14 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
             hr_cost = hr_lookup.get((yr, str(project or "")), 0.0)
         ratio = merged.get("比例", 0.0)
         if ratio == 0:
-            ratio = calc_hr_ratio(hr_cost, request_pct)
+            if is_headquarters_project(project):
+                ratio = calc_hq_hr_ratio(
+                    hr_cost,
+                    merged.get("營收", 0.0),
+                    merged.get("營收(未進帳)", 0.0),
+                )
+            else:
+                ratio = calc_hr_ratio(hr_cost, request_pct)
         project_key = str(project or "")
         covered_projects.add((yr, project_key))
         rows.append(
@@ -1157,12 +1196,7 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
             continue
         last_vals = out.groupby(["年度", "公司名", "案場"], as_index=False)[col].last()
         grouped[col] = last_vals[col].values
-    grouped["比例"] = grouped.apply(
-        lambda r: calc_hr_ratio(float(r.get("人事成本") or 0), float(r.get("請款額1%") or 0))
-        if float(r.get("請款額1%") or 0) > 0
-        else float(r.get("比例") or 0),
-        axis=1,
-    )
+    grouped["比例"] = grouped.apply(case_row_hr_ratio, axis=1)
     return grouped[CASE_TOTAL_COLS]
 
 
