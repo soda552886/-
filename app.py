@@ -749,7 +749,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-9"
+APP_VERSION = "20260524-10"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -952,6 +952,19 @@ with tab_report:
                 "含案場與總公司。案場比例 = 人事成本 ÷ 請款額1% × 100；"
                 "總公司比例 = 人事成本 ÷ (營收 + 營收(未進帳)) × 100。合計列不加總比例。"
             )
+            st.markdown("#### 總公司")
+            hq_df = case_df[case_df["案場"] == HEADQUARTERS_PROJECT].copy()
+            show_report_table(
+                hq_df,
+                CASE_TOTAL_COLS,
+                [c for c in CASE_TOTAL_COLS if c not in {"年度", "公司名", "案場"}],
+                "全案總表（總公司）",
+                "全案總表_總公司_匯出.xlsx",
+                "case_total_hq",
+                percent_cols=["比例"],
+                ratio_mode="hq",
+            )
+            st.caption("總公司比例(%) = 人事成本 ÷ (營收 + 營收(未進帳)) × 100。")
         elif report_view == "人事成本":
             hr_df = build_hr_cost_frame(df_all, filter_year)
             show_report_table(
