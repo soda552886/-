@@ -49,6 +49,8 @@ HR_COST_COLS = ["年度", "案場", "勞保", "勞退", "健保", "二代", "薪
 YEARLY_STAT_COLS = ["姓名", "113年", "114年", "115年", "總計"]
 PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
 MONTHLY_TOTAL_COLS = ["年度", "案場", "姓名", "一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月", "總計"]
+MONTH_LABELS = MONTHLY_TOTAL_COLS[3:15]
+MONTH_NUM_TO_LABEL = {i + 1: label for i, label in enumerate(MONTH_LABELS)}
 
 CASE_NOTE_KEYS = ["總銷", "簽約金額", "銷售請款額", "請款額1%", "請款淨額", "營收", "營收(未進帳)"]
 CASE_OVERWRITE_FIELDS = {"總銷"}
@@ -1288,7 +1290,6 @@ def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = No
     if df_all.empty:
         return pd.DataFrame(columns=MONTHLY_TOTAL_COLS)
 
-    month_keys = [(i, f"{i}月") for i in range(1, 13)]
     buckets: dict[tuple[int, str, str], dict[str, float | int | str]] = {}
 
     new_sources = _filter_sources(df_all, list(NEW_HR_SOURCES))
@@ -1327,12 +1328,12 @@ def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = No
                 "姓名": name,
                 "總計": 0.0,
             }
-            for _, mcol in month_keys:
-                row_data[mcol] = 0.0
+            for label in MONTH_LABELS:
+                row_data[label] = 0.0
             buckets[key] = row_data
 
         row_data = buckets[key]
-        month_col = f"{month}月"
+        month_col = MONTH_NUM_TO_LABEL[month]
         row_data[month_col] = float(row_data.get(month_col) or 0) + amount
         row_data["總計"] = float(row_data.get("總計") or 0) + amount
 
@@ -1340,8 +1341,9 @@ def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = No
         return pd.DataFrame(columns=MONTHLY_TOTAL_COLS)
 
     out = pd.DataFrame(list(buckets.values()))
-    rename_map = {f"{i}月": label for i, label in month_keys}
-    out = out.rename(columns=rename_map)
+    for col in MONTHLY_TOTAL_COLS:
+        if col not in out.columns:
+            out[col] = 0.0
     return out.sort_values(["年度", "案場", "姓名"], na_position="last")[MONTHLY_TOTAL_COLS]
 
 
