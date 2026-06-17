@@ -37,6 +37,7 @@ from hr_system_core import (
     HR_COST_COLS,
     HR_ITEM_OPTIONS,
     HR_MANUAL_ITEM_OPTIONS,
+    MONTHLY_TOTAL_COLS,
     PERSONAL_INCOME_COLS,
     PROJECT_OPTIONS,
     SITE_PROJECT_OPTIONS,
@@ -46,6 +47,7 @@ from hr_system_core import (
     build_case_total_frame,
     build_hr_cost_frame,
     build_personal_income_frame,
+    build_monthly_total_frame,
     build_yearly_stat_frame,
     calc_hr_ratio,
     calc_request_pct,
@@ -749,7 +751,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-10"
+APP_VERSION = "20260524-11"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -882,7 +884,7 @@ with tab_report:
             )
         fy = st.selectbox("篩選年度", ["全部", *YEAR_OPTIONS], key="report_filter_year")
         filter_year = None if fy == "全部" else int(fy)
-        report_view = st.selectbox("選擇報表", ["全案總表", "人事成本", "在職年統計", "個人所得"], key="report_view")
+        report_view = st.selectbox("選擇報表", ["全案總表", "人事成本", "在職年統計", "個人所得", "月份總計"], key="report_view")
 
         def show_report_table(
             df: pd.DataFrame,
@@ -938,8 +940,9 @@ with tab_report:
 
         if report_view == "全案總表":
             case_df = build_case_total_frame(df_all, filter_year)
+            site_df = case_df[case_df["案場"] != HEADQUARTERS_PROJECT].copy()
             show_report_table(
-                case_df,
+                site_df,
                 CASE_TOTAL_COLS,
                 [c for c in CASE_TOTAL_COLS if c not in {"年度", "公司名", "案場"}],
                 "全案總表",
@@ -986,7 +989,7 @@ with tab_report:
                 "yearly_stat",
             )
             st.caption("資料條件：人事成本中的「薪資 + 獎金」。")
-        else:
+        elif report_view == "個人所得":
             income_df = build_personal_income_frame(df_all, filter_year)
             show_report_table(
                 income_df,
@@ -997,6 +1000,17 @@ with tab_report:
                 "personal_income",
             )
             st.caption("依「年度 + 案場 + 姓名」加總；金額 = 薪資 + 三節 + 獎金 + 員工福利。")
+        else:
+            monthly_df = build_monthly_total_frame(df_all, filter_year)
+            show_report_table(
+                monthly_df,
+                MONTHLY_TOTAL_COLS,
+                [c for c in MONTHLY_TOTAL_COLS if c not in {"年度", "案場", "姓名"}],
+                "月份總計",
+                "月份總計_匯出.xlsx",
+                "monthly_total",
+            )
+            st.caption("依「年度 + 案場 + 姓名」彙總，每月金額 = 薪資 + 三節 + 獎金 + 員工福利。")
 
 with tab_manual:
     st.subheader("手動新增資料")

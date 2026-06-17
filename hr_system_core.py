@@ -48,6 +48,7 @@ CASE_TOTAL_COLS = [
 HR_COST_COLS = ["年度", "案場", "勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "總計"]
 YEARLY_STAT_COLS = ["姓名", "113年", "114年", "115年", "總計"]
 PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
+MONTHLY_TOTAL_COLS = ["年度", "案場", "姓名", "一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月", "總計"]
 
 CASE_NOTE_KEYS = ["總銷", "簽約金額", "銷售請款額", "請款額1%", "請款淨額", "營收", "營收(未進帳)"]
 CASE_OVERWRITE_FIELDS = {"總銷"}
@@ -1281,6 +1282,67 @@ def _personal_income_gross(note: object, row: pd.Series | None = None) -> float:
             + parse_note_number(note, "三節")
         )
     return gross
+
+
+def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
+    if df_all.empty:
+        return pd.DataFrame(columns=MONTHLY_TOTAL_COLS)
+
+    month_keys = [(i, f"{i}月") for i in range(1, 13)]
+    buckets: dict[tuple[int, str, str], dict[str, float | int | str]] = {}
+
+    new_sources = _filter_sources(df_all, list(NEW_HR_SOURCES))
+    for _, row in new_sources.iterrows():
+        yr = roc_year_from_value(row.get("roc_year"))
+        if yr is None:
+            continue
+        if filter_year is not None and yr != filter_year:
+            continue
+
+        name = clean_text(row.get("employee_name"))
+        project = clean_text(row.get("project_name"))
+        if not name or not project:
+            continue
+
+        note = row.get("note")
+        date_text = parse_roc_date_text(parse_note_value(note, "date"))
+        if not date_text:
+            continue
+        try:
+            month = int(str(date_text).split("-")[1])
+        except (IndexError, ValueError, TypeError):
+            continue
+        if month < 1 or month > 12:
+            continue
+
+        amount = _personal_income_gross(note, row)
+        if amount <= 0:
+            continue
+
+        key = (yr, project, name)
+        if key not in buckets:
+            row_data: dict[str, float | int | str] = {
+                "年度": yr,
+                "案場": project,
+                "姓名": name,
+                "總計": 0.0,
+            }
+            for _, mcol in month_keys:
+                row_data[mcol] = 0.0
+            buckets[key] = row_data
+
+        row_data = buckets[key]
+        month_col = f"{month}月"
+        row_data[month_col] = float(row_data.get(month_col) or 0) + amount
+        row_data["總計"] = float(row_data.get("總計") or 0) + amount
+
+    if not buckets:
+        return pd.DataFrame(columns=MONTHLY_TOTAL_COLS)
+
+    out = pd.DataFrame(list(buckets.values()))
+    rename_map = {f"{i}月": label for i, label in month_keys}
+    out = out.rename(columns=rename_map)
+    return out.sort_values(["年度", "案場", "姓名"], na_position="last")[MONTHLY_TOTAL_COLS]
 
 
 def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
