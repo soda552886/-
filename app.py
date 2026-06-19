@@ -751,7 +751,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-13"
+APP_VERSION = "20260524-14"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -908,7 +908,7 @@ with tab_report:
                 display_df[c] = pd.to_numeric(display_df[c], errors="coerce").fillna(0.0)
             sum_cols = [c for c in num_cols if c not in percent_cols]
             total_kwargs: dict = {c: float(display_df[c].sum()) for c in sum_cols}
-            if "比例" in percent_cols and "人事成本" in display_df.columns and ratio_mode != "all":
+            if "比例" in percent_cols and "人事成本" in display_df.columns:
                 hr_sum = float(display_df["人事成本"].sum())
                 if ratio_mode == "hq":
                     den = hq_revenue_base(
@@ -949,11 +949,10 @@ with tab_report:
                 "全案總表_匯出.xlsx",
                 "case_total",
                 percent_cols=["比例"],
-                ratio_mode="all",
             )
             st.caption(
-                "含案場與總公司。案場比例 = 人事成本 ÷ 請款額1% × 100；"
-                "總公司比例 = 人事成本 ÷ (營收 + 營收(未進帳)) × 100。合計列不加總比例。"
+                "案場比例 = 人事成本 ÷ 請款額1% × 100；"
+                "合計列比例 = 人事成本合計 ÷ 請款額1%合計 × 100。"
             )
             st.markdown("#### 總公司")
             hq_df = case_df[case_df["案場"] == HEADQUARTERS_PROJECT].copy()
