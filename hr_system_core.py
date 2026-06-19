@@ -48,9 +48,10 @@ CASE_TOTAL_COLS = [
 HR_COST_COLS = ["年度", "案場", "勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "總計"]
 YEARLY_STAT_COLS = ["姓名", "113年", "114年", "115年", "總計"]
 PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
-MONTHLY_TOTAL_COLS = ["年度", "案場", "姓名", "一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月", "總計"]
+MONTHLY_TOTAL_COLS = ["年度", "案場", "項目", "一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月", "總計"]
 MONTH_LABELS = MONTHLY_TOTAL_COLS[3:15]
 MONTH_NUM_TO_LABEL = {i + 1: label for i, label in enumerate(MONTH_LABELS)}
+MONTHLY_TOTAL_ITEMS = ["薪資", "獎金"]
 
 CASE_NOTE_KEYS = ["總銷", "簽約金額", "銷售請款額", "請款額1%", "請款淨額", "營收", "營收(未進帳)"]
 CASE_OVERWRITE_FIELDS = {"總銷"}
@@ -671,6 +672,25 @@ def parse_roc_date_text(value: object) -> str:
     except Exception:
         pass
     return text
+
+
+def payroll_report_month_from_date(value: object) -> tuple[int, int] | None:
+    """薪資月份：M 月資料對應日期為 (M+1) 月 1 日～25 日（例：1 月 = 2/1～2/25）。"""
+    text = parse_roc_date_text(value)
+    if not text:
+        return None
+    m = re.match(r"(\d+)-(\d+)-(\d+)", text)
+    if not m:
+        return None
+    year_raw = int(m.group(1))
+    cal_month = int(m.group(2))
+    day = int(m.group(3))
+    if cal_month < 1 or cal_month > 12 or day < 1 or day > 25:
+        return None
+    roc_year = year_raw - 1911 if year_raw >= 1911 else year_raw
+    if cal_month == 1:
+        return roc_year - 1, 12
+    return roc_year, cal_month - 1
 
 
 def _clean_import_col(name: object) -> str:
@@ -1294,48 +1314,40 @@ def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = No
 
     new_sources = _filter_sources(df_all, list(NEW_HR_SOURCES))
     for _, row in new_sources.iterrows():
-        yr = roc_year_from_value(row.get("roc_year"))
-        if yr is None:
-            continue
-        if filter_year is not None and yr != filter_year:
-            continue
-
-        name = clean_text(row.get("employee_name"))
         project = clean_text(row.get("project_name"))
-        if not name or not project:
+        if not project:
             continue
 
         note = row.get("note")
-        date_text = parse_roc_date_text(parse_note_value(note, "date"))
-        if not date_text:
+        date_text = parse_note_value(note, "date")
+        report = payroll_report_month_from_date(date_text)
+        if report is None:
             continue
-        try:
-            month = int(str(date_text).split("-")[1])
-        except (IndexError, ValueError, TypeError):
-            continue
-        if month < 1 or month > 12:
+        report_year, report_month = report
+        if filter_year is not None and report_year != filter_year:
             continue
 
-        amount = _personal_income_gross(note, row)
-        if amount <= 0:
-            continue
+        for item in MONTHLY_TOTAL_ITEMS:
+            amount = parse_note_number(note, item)
+            if amount <= 0:
+                continue
 
-        key = (yr, project, name)
-        if key not in buckets:
-            row_data: dict[str, float | int | str] = {
-                "年度": yr,
-                "案場": project,
-                "姓名": name,
-                "總計": 0.0,
-            }
-            for label in MONTH_LABELS:
-                row_data[label] = 0.0
-            buckets[key] = row_data
+            key = (report_year, project, item)
+            if key not in buckets:
+                row_data: dict[str, float | int | str] = {
+                    "年度": report_year,
+                    "案場": project,
+                    "項目": item,
+                    "總計": 0.0,
+                }
+                for label in MONTH_LABELS:
+                    row_data[label] = 0.0
+                buckets[key] = row_data
 
-        row_data = buckets[key]
-        month_col = MONTH_NUM_TO_LABEL[month]
-        row_data[month_col] = float(row_data.get(month_col) or 0) + amount
-        row_data["總計"] = float(row_data.get("總計") or 0) + amount
+            row_data = buckets[key]
+            month_col = MONTH_NUM_TO_LABEL[report_month]
+            row_data[month_col] = float(row_data.get(month_col) or 0) + amount
+            row_data["總計"] = float(row_data.get("總計") or 0) + amount
 
     if not buckets:
         return pd.DataFrame(columns=MONTHLY_TOTAL_COLS)
@@ -1344,7 +1356,7 @@ def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = No
     for col in MONTHLY_TOTAL_COLS:
         if col not in out.columns:
             out[col] = 0.0
-    return out.sort_values(["年度", "案場", "姓名"], na_position="last")[MONTHLY_TOTAL_COLS]
+    return out.sort_values(["年度", "案場", "項目"], na_position="last")[MONTHLY_TOTAL_COLS]
 
 
 def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
