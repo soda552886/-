@@ -74,6 +74,7 @@ _STRUCTURED_NOTE_KEYS = frozenset(
 HR_COST_SUM_KEYS = ["勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利"]
 HR_IMPORT_DISPLAY_COLS = [
     "年度",
+    "公司名",
     "案名",
     "姓名",
     "日期",
@@ -733,13 +734,15 @@ def _rename_hr_import_columns(df: pd.DataFrame) -> pd.DataFrame:
     out.columns = new_cols
     if "案場" in out.columns and "案名" not in out.columns:
         out = out.rename(columns={"案場": "案名"})
+    if "公司名" not in out.columns and "公司名稱" in out.columns:
+        out = out.rename(columns={"公司名稱": "公司名"})
     return out
 
 
 def _forward_fill_import_group_keys(df: pd.DataFrame) -> pd.DataFrame:
     """Excel 合併儲存格時，姓名/日期等常只有第一列有值，向下沿用。"""
     out = df.copy()
-    for col in ("年度", "案名", "姓名", "日期"):
+    for col in ("年度", "公司名", "案名", "姓名", "日期"):
         if col not in out.columns:
             continue
         series = out[col].map(lambda x: clean_text(x) if not pd.isna(x) else "")
@@ -774,6 +777,7 @@ def build_hr_cost_record(
     bonus_type: str = "",
     times: str = "1",
     remark: str = "",
+    company_name: str | None = None,
 ) -> dict:
     item_amounts = {name: 0.0 for name in HR_MANUAL_ITEM_OPTIONS}
     if item in item_amounts:
@@ -811,7 +815,7 @@ def build_hr_cost_record(
     return {
         "sheet_name": "人事成本",
         "employee_name": employee_name,
-        "company_name": None,
+        "company_name": clean_text(company_name) or None,
         "project_name": project_name,
         "roc_year": roc_year,
         "salary": item_amounts["薪資"],
@@ -843,6 +847,7 @@ def _hr_detail_row_to_record(row: pd.Series) -> dict | None:
     bonus_type = clean_text(row.get("獎項"))
     times = clean_text(row.get("次數")) or "1"
     remark = clean_text(row.get("備註"))
+    company = clean_text(row.get("公司名"))
     date_text = parse_roc_date_text(row.get("日期"))
 
     if not name and not any(
@@ -876,6 +881,7 @@ def _hr_detail_row_to_record(row: pd.Series) -> dict | None:
         bonus_type=bonus_type,
         times=times,
         remark=remark,
+        company_name=company or None,
     )
 
 
@@ -891,6 +897,7 @@ def parse_hr_detail_dataframe(df: pd.DataFrame) -> tuple[list[dict], pd.DataFram
         preview_rows.append(
             {
                 "年度": record["roc_year"],
+                "公司名": record.get("company_name") or "",
                 "案名": record["project_name"],
                 "姓名": record["employee_name"],
                 "日期": parse_note_value(record["note"], "date") or parse_roc_date_text(row.get("日期")),
@@ -951,6 +958,7 @@ def build_hr_import_template_bytes() -> bytes:
     ws.append(
         [
             "114",
+            "得意佳",
             "天水一墅",
             "範例姓名",
             "115/05/10",
@@ -1119,17 +1127,34 @@ def _merge_case_notes(note_series: pd.Series) -> dict[str, float]:
     return merged
 
 
+def _build_hr_cost_lookups(
+    df_all: pd.DataFrame, filter_year: int | None = None
+) -> tuple[dict[tuple[int, str], float], dict[tuple[int, str, str], float]]:
+    hr_lookup: dict[tuple[int, str], float] = {}
+    hr_company_lookup: dict[tuple[int, str, str], float] = {}
+    new_sources = _filter_sources(df_all, list(NEW_HR_SOURCES))
+    for _, row in new_sources.iterrows():
+        yr = roc_year_from_value(row.get("roc_year"))
+        if yr is None:
+            continue
+        if filter_year is not None and yr != filter_year:
+            continue
+        project = str(row.get("project_name") or "")
+        company = clean_text(row.get("company_name"))
+        cost = float(row.get("total_income") or 0)
+        if cost <= 0:
+            cost = hr_cost_sum_from_note(row.get("note"))
+        if cost <= 0:
+            continue
+        hr_lookup[(yr, project)] = hr_lookup.get((yr, project), 0) + cost
+        hr_company_lookup[(yr, project, company)] = hr_company_lookup.get((yr, project, company), 0) + cost
+    return hr_lookup, hr_company_lookup
+
+
 def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
     sources = _filter_sources(df_all, list(NEW_CASE_SOURCES))
 
-    hr_agg = build_hr_cost_frame(df_all, filter_year=filter_year)
-    hr_lookup: dict[tuple[int, str], float] = {}
-    if not hr_agg.empty:
-        for _, r in hr_agg.iterrows():
-            yr = roc_year_from_value(r.get("年度"))
-            if yr is None:
-                continue
-            hr_lookup[(yr, str(r.get("案場") or ""))] = float(r.get("總計") or 0)
+    hr_lookup, hr_company_lookup = _build_hr_cost_lookups(df_all, filter_year)
 
     if sources.empty and not hr_lookup:
         return pd.DataFrame(columns=CASE_TOTAL_COLS)
@@ -1188,7 +1213,7 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
             }
         )
 
-    for (yr, project), hr_cost in hr_lookup.items():
+    for (yr, project, company), hr_cost in hr_company_lookup.items():
         if filter_year is not None and yr != filter_year:
             continue
         if (yr, project) in covered_projects:
@@ -1196,7 +1221,7 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
         rows.append(
             {
                 "年度": yr,
-                "公司名": "",
+                "公司名": company,
                 "案場": project,
                 "總銷": 0.0,
                 "簽約金額": 0.0,

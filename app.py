@@ -751,7 +751,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-14"
+APP_VERSION = "20260524-15"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -777,7 +777,7 @@ tab_import, tab_report, tab_manual, tab_query, tab_batches = st.tabs(
 with tab_import:
     st.subheader("檔案匯入（人事成本明細）")
     st.caption(
-        "上傳 Excel / CSV，欄位：年度、案名、姓名、日期、項目、金額、勞保、勞退、"
+        "上傳 Excel / CSV，欄位：年度、公司名、案名、姓名、日期、項目、金額、勞保、勞退、"
         "保費、金額、稅款、金額、獎項、次數、備註（與手動新增同一筆可同時填寫各區塊）。"
     )
     col_tpl, col_hint = st.columns([1, 2])
