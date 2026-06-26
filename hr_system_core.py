@@ -1160,7 +1160,7 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
         return pd.DataFrame(columns=CASE_TOTAL_COLS)
 
     rows: list[dict] = []
-    covered_projects: set[tuple[int, str]] = set()
+    covered_case_keys: set[tuple[int, str, str]] = set()
 
     if not sources.empty:
         grouped = sources.groupby(["roc_year", "company_name", "project_name"], dropna=False)
@@ -1182,8 +1182,12 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
         if request_pct == 0 and sales_request > 0:
             request_pct = calc_request_pct(sales_request)
         hr_cost = merged.get("人事成本", 0.0)
+        project_key = str(project or "")
+        company_key = str(company or "")
         if hr_cost == 0:
-            hr_cost = hr_lookup.get((yr, str(project or "")), 0.0)
+            hr_cost = hr_company_lookup.get((yr, project_key, company_key), 0.0)
+            if hr_cost == 0 and not company_key:
+                hr_cost = hr_lookup.get((yr, project_key), 0.0)
         ratio = merged.get("比例", 0.0)
         if ratio == 0:
             if is_headquarters_project(project):
@@ -1194,12 +1198,11 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
                 )
             else:
                 ratio = calc_hr_ratio(hr_cost, request_pct)
-        project_key = str(project or "")
-        covered_projects.add((yr, project_key))
+        covered_case_keys.add((yr, project_key, company_key))
         rows.append(
             {
                 "年度": yr,
-                "公司名": str(company or ""),
+                "公司名": company_key,
                 "案場": project_key,
                 "總銷": merged.get("總銷", 0.0),
                 "簽約金額": merged.get("簽約金額", 0.0),
@@ -1216,7 +1219,7 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
     for (yr, project, company), hr_cost in hr_company_lookup.items():
         if filter_year is not None and yr != filter_year:
             continue
-        if (yr, project) in covered_projects:
+        if (yr, project, company) in covered_case_keys:
             continue
         rows.append(
             {
