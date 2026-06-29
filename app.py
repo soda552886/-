@@ -751,7 +751,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-16"
+APP_VERSION = "20260524-17"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -1004,14 +1004,15 @@ with tab_report:
             show_report_table(
                 monthly_df,
                 MONTHLY_TOTAL_COLS,
-                [c for c in MONTHLY_TOTAL_COLS if c not in {"年度", "案場", "項目"}],
+                [c for c in MONTHLY_TOTAL_COLS if c not in {"年度", "公司名", "案場", "項目"}],
                 "月份總計",
                 "月份總計_匯出.xlsx",
                 "monthly_total",
             )
             st.caption(
-                "依「年度 + 案場 + 項目（薪資、獎金）」彙總；"
+                "依「年度 + 公司名 + 案場 + 項目（薪資、獎金）」彙總；獎金含三節。"
                 "每月金額依發薪日期歸月：1 月 = 2/1～2/25、2 月 = 3/1～3/25，以此類推。"
+                "（全案總表人事成本另含勞健退等，與本表薪資/獎金加總可能不同。）"
             )
 
 with tab_manual:

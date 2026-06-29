@@ -48,8 +48,8 @@ CASE_TOTAL_COLS = [
 HR_COST_COLS = ["年度", "案場", "勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "總計"]
 YEARLY_STAT_COLS = ["姓名", "113年", "114年", "115年", "總計"]
 PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
-MONTHLY_TOTAL_COLS = ["年度", "案場", "項目", "一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月", "總計"]
-MONTH_LABELS = MONTHLY_TOTAL_COLS[3:15]
+MONTHLY_TOTAL_COLS = ["年度", "公司名", "案場", "項目", "一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月", "總計"]
+MONTH_LABELS = MONTHLY_TOTAL_COLS[4:16]
 MONTH_NUM_TO_LABEL = {i + 1: label for i, label in enumerate(MONTH_LABELS)}
 MONTHLY_TOTAL_ITEMS = ["薪資", "獎金"]
 
@@ -1334,17 +1334,33 @@ def _personal_income_gross(note: object, row: pd.Series | None = None) -> float:
     return gross
 
 
+def _monthly_record_items(note: object, row: pd.Series | None = None) -> list[tuple[str, float]]:
+    salary_amt = parse_note_number(note, "薪資")
+    if salary_amt <= 0 and row is not None:
+        salary_amt = float(row.get("salary") or 0)
+    bonus_amt = parse_note_number(note, "獎金") + parse_note_number(note, "三節")
+    if bonus_amt <= 0 and row is not None:
+        bonus_amt = float(row.get("bonus") or 0)
+    items: list[tuple[str, float]] = []
+    if salary_amt > 0:
+        items.append(("薪資", salary_amt))
+    if bonus_amt > 0:
+        items.append(("獎金", bonus_amt))
+    return items
+
+
 def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
     if df_all.empty:
         return pd.DataFrame(columns=MONTHLY_TOTAL_COLS)
 
-    buckets: dict[tuple[int, str, str], dict[str, float | int | str]] = {}
+    buckets: dict[tuple[int, str, str, str], dict[str, float | int | str]] = {}
 
     new_sources = _filter_sources(df_all, list(NEW_HR_SOURCES))
     for _, row in new_sources.iterrows():
         project = clean_text(row.get("project_name"))
         if not project:
             continue
+        company = clean_text(row.get("company_name"))
 
         note = row.get("note")
         date_text = parse_note_value(note, "date")
@@ -1355,15 +1371,12 @@ def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = No
         if filter_year is not None and report_year != filter_year:
             continue
 
-        for item in MONTHLY_TOTAL_ITEMS:
-            amount = parse_note_number(note, item)
-            if amount <= 0:
-                continue
-
-            key = (report_year, project, item)
+        for item, amount in _monthly_record_items(note, row):
+            key = (report_year, company, project, item)
             if key not in buckets:
                 row_data: dict[str, float | int | str] = {
                     "年度": report_year,
+                    "公司名": company,
                     "案場": project,
                     "項目": item,
                     "總計": 0.0,
@@ -1384,7 +1397,7 @@ def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = No
     for col in MONTHLY_TOTAL_COLS:
         if col not in out.columns:
             out[col] = 0.0
-    return out.sort_values(["年度", "案場", "項目"], na_position="last")[MONTHLY_TOTAL_COLS]
+    return out.sort_values(["年度", "公司名", "案場", "項目"], na_position="last")[MONTHLY_TOTAL_COLS]
 
 
 def build_personal_income_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
