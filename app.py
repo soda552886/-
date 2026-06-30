@@ -751,7 +751,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-17"
+APP_VERSION = "20260524-18"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -969,14 +969,26 @@ with tab_report:
             st.caption("總公司比例(%) = 人事成本 ÷ (營收 + 營收(未進帳)) × 100。")
         elif report_view == "人事成本":
             hr_df = build_hr_cost_frame(df_all, filter_year)
+            site_hr_df = hr_df[hr_df["案場"] != HEADQUARTERS_PROJECT].copy()
             show_report_table(
-                hr_df,
+                site_hr_df,
                 HR_COST_COLS,
-                [c for c in HR_COST_COLS if c not in {"年度", "案場"}],
+                [c for c in HR_COST_COLS if c not in {"年度", "公司名", "案場"}],
                 "人事成本",
                 "人事成本_匯出.xlsx",
                 "hr_cost",
             )
+            st.markdown("#### 總公司")
+            hq_hr_df = hr_df[hr_df["案場"] == HEADQUARTERS_PROJECT].copy()
+            show_report_table(
+                hq_hr_df,
+                HR_COST_COLS,
+                [c for c in HR_COST_COLS if c not in {"年度", "公司名", "案場"}],
+                "人事成本（總公司）",
+                "人事成本_總公司_匯出.xlsx",
+                "hr_cost_hq",
+            )
+            st.caption("依「年度 + 公司名 + 案場」彙總人事成本明細。")
         elif report_view == "在職年統計":
             yearly_df = build_yearly_stat_frame(df_all)
             show_report_table(
@@ -1001,13 +1013,24 @@ with tab_report:
             st.caption("依「年度 + 案場 + 姓名」加總；金額 = 薪資 + 三節 + 獎金 + 員工福利。")
         else:
             monthly_df = build_monthly_total_frame(df_all, filter_year)
+            site_monthly_df = monthly_df[monthly_df["案場"] != HEADQUARTERS_PROJECT].copy()
             show_report_table(
-                monthly_df,
+                site_monthly_df,
                 MONTHLY_TOTAL_COLS,
                 [c for c in MONTHLY_TOTAL_COLS if c not in {"年度", "公司名", "案場", "項目"}],
                 "月份總計",
                 "月份總計_匯出.xlsx",
                 "monthly_total",
+            )
+            st.markdown("#### 總公司")
+            hq_monthly_df = monthly_df[monthly_df["案場"] == HEADQUARTERS_PROJECT].copy()
+            show_report_table(
+                hq_monthly_df,
+                MONTHLY_TOTAL_COLS,
+                [c for c in MONTHLY_TOTAL_COLS if c not in {"年度", "公司名", "案場", "項目"}],
+                "月份總計（總公司）",
+                "月份總計_總公司_匯出.xlsx",
+                "monthly_total_hq",
             )
             st.caption(
                 "依「年度 + 公司名 + 案場 + 項目（薪資、獎金）」彙總；獎金含三節。"

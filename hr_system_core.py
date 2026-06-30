@@ -45,7 +45,7 @@ CASE_TOTAL_COLS = [
     "人事成本",
     "比例",
 ]
-HR_COST_COLS = ["年度", "案場", "勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "總計"]
+HR_COST_COLS = ["年度", "公司名", "案場", "勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "總計"]
 YEARLY_STAT_COLS = ["姓名", "113年", "114年", "115年", "總計"]
 PERSONAL_INCOME_COLS = ["年度", "案場", "姓名", "金額", "所得稅", "執行業務所得", "二代健保", "實領金額"]
 MONTHLY_TOTAL_COLS = ["年度", "公司名", "案場", "項目", "一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月", "總計"]
@@ -360,9 +360,10 @@ def _normalize_case_note(note: object) -> str:
     return text
 
 
-def _hr_display_item(year: int, project: str, note: str, total: float) -> dict:
+def _hr_display_item(year: int, project: str, note: str, total: float, company: str = "") -> dict:
     return {
         "年度": year,
+        "公司名": company,
         "案場": project,
         "勞保": parse_note_number(note, "勞保"),
         "勞退": parse_note_number(note, "勞退"),
@@ -1161,9 +1162,16 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
 
     rows: list[dict] = []
     covered_case_keys: set[tuple[int, str, str]] = set()
+    attributed_unattributed: set[tuple[int, str]] = set()
+    case_companies_by_project: dict[tuple[int, str], set[str]] = {}
 
     if not sources.empty:
         grouped = sources.groupby(["roc_year", "company_name", "project_name"], dropna=False)
+        for (year, company, project), _ in grouped:
+            yr = int(year) if pd.notna(year) and to_number(year) >= 100 else None
+            if yr is None:
+                continue
+            case_companies_by_project.setdefault((yr, str(project or "")), set()).add(str(company or ""))
     else:
         grouped = []
 
@@ -1186,7 +1194,14 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
         company_key = str(company or "")
         if hr_cost == 0:
             hr_cost = hr_company_lookup.get((yr, project_key, company_key), 0.0)
-            if hr_cost == 0 and not company_key:
+            if hr_cost == 0 and company_key:
+                unattr = hr_company_lookup.get((yr, project_key, ""), 0.0)
+                if unattr > 0:
+                    named = {c for c in case_companies_by_project.get((yr, project_key), set()) if c}
+                    if len(named) == 1 and company_key in named:
+                        hr_cost = unattr
+                        attributed_unattributed.add((yr, project_key))
+            elif hr_cost == 0 and not company_key:
                 hr_cost = hr_lookup.get((yr, project_key), 0.0)
         ratio = merged.get("比例", 0.0)
         if ratio == 0:
@@ -1220,6 +1235,8 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
         if filter_year is not None and yr != filter_year:
             continue
         if (yr, project, company) in covered_case_keys:
+            continue
+        if not company and (yr, project) in attributed_unattributed:
             continue
         rows.append(
             {
@@ -1264,12 +1281,19 @@ def build_hr_cost_frame(df_all: pd.DataFrame, filter_year: int | None = None) ->
         if filter_year is not None and yr != filter_year:
             continue
         note = row.get("note")
-        item = _hr_display_item(yr, str(row.get("project_name") or ""), str(note or ""), float(row.get("total_income") or 0))
+        company = clean_text(row.get("company_name"))
+        item = _hr_display_item(
+            yr,
+            str(row.get("project_name") or ""),
+            str(note or ""),
+            float(row.get("total_income") or 0),
+            company,
+        )
         rows.append(item)
 
     if not rows:
         return pd.DataFrame(columns=HR_COST_COLS)
-    out = pd.DataFrame(rows).groupby(["年度", "案場"], as_index=False).sum(numeric_only=True)
+    out = pd.DataFrame(rows).groupby(["年度", "公司名", "案場"], as_index=False).sum(numeric_only=True)
     return out[HR_COST_COLS]
 
 
