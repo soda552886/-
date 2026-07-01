@@ -677,7 +677,7 @@ def parse_roc_date_text(value: object) -> str:
 
 
 def payroll_report_month_from_date(value: object) -> tuple[int, int] | None:
-    """薪資月份：M 月資料對應日期為 (M+1) 月 1 日～25 日（例：1 月 = 2/1～2/25）。"""
+    """薪資月份：M 月資料對應 (M+1) 月整月（例：1 月 = 2/1～2/29、2 月 = 3/1～3/31）。"""
     text = parse_roc_date_text(value)
     if not text:
         return None
@@ -687,7 +687,7 @@ def payroll_report_month_from_date(value: object) -> tuple[int, int] | None:
     year_raw = int(m.group(1))
     cal_month = int(m.group(2))
     day = int(m.group(3))
-    if cal_month < 1 or cal_month > 12 or day < 1 or day > 25:
+    if cal_month < 1 or cal_month > 12 or day < 1 or day > 31:
         return None
     roc_year = year_raw - 1911 if year_raw >= 1911 else year_raw
     if cal_month == 1:
