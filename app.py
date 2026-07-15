@@ -751,7 +751,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-20"
+APP_VERSION = "20260524-21"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -1177,14 +1177,16 @@ with tab_manual:
 
     with mtab2:
         with st.form("manual_hr_form", clear_on_submit=True):
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3, c4, c5 = st.columns(5)
             with c1:
                 hr_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_hr_year")
             with c2:
-                hr_name = st.text_input("姓名", key="m_hr_name")
+                hr_company = st.selectbox("公司名", COMPANY_OPTIONS, key="m_hr_company")
             with c3:
-                hr_project = st.selectbox("案場", PROJECT_OPTIONS, key="m_hr_project")
+                hr_name = st.text_input("姓名", key="m_hr_name")
             with c4:
+                hr_project = st.selectbox("案場", PROJECT_OPTIONS, key="m_hr_project")
+            with c5:
                 hr_date = st.date_input("日期", key="m_hr_date")
 
             st.markdown("**① 項目**")
@@ -1262,7 +1264,7 @@ with tab_manual:
                     [{
                         "sheet_name": "人事成本",
                         "employee_name": hr_name.strip(),
-                        "company_name": None,
+                        "company_name": hr_company,
                         "project_name": hr_project,
                         "roc_year": int(hr_year),
                         "salary": item_amounts["薪資"],

@@ -1268,28 +1268,38 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
     return grouped[CASE_TOTAL_COLS]
 
 
+def _sole_named_company_map(pairs: list[tuple[int, str, str]]) -> dict[tuple[int, str], str]:
+    """若同一年度+案場只有一家非空白公司，回傳該公司映射，供空白公司名併入。"""
+    named: dict[tuple[int, str], set[str]] = {}
+    for yr, project, company in pairs:
+        if not company:
+            continue
+        named.setdefault((yr, project), set()).add(company)
+    return {key: next(iter(vals)) for key, vals in named.items() if len(vals) == 1}
+
+
 def build_hr_cost_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
     rows: list[dict] = []
     if df_all.empty:
         return pd.DataFrame(columns=HR_COST_COLS)
 
     new_sources = _filter_sources(df_all, list(NEW_HR_SOURCES))
+    draft: list[tuple[int, str, str, object, float]] = []
     for _, row in new_sources.iterrows():
         yr = roc_year_from_value(row.get("roc_year"))
         if yr is None:
             continue
         if filter_year is not None and yr != filter_year:
             continue
-        note = row.get("note")
+        project = str(row.get("project_name") or "")
         company = clean_text(row.get("company_name"))
-        item = _hr_display_item(
-            yr,
-            str(row.get("project_name") or ""),
-            str(note or ""),
-            float(row.get("total_income") or 0),
-            company,
-        )
-        rows.append(item)
+        draft.append((yr, project, company, row.get("note"), float(row.get("total_income") or 0)))
+
+    sole = _sole_named_company_map([(yr, project, company) for yr, project, company, _, _ in draft])
+    for yr, project, company, note, total in draft:
+        if not company:
+            company = sole.get((yr, project), "")
+        rows.append(_hr_display_item(yr, project, str(note or ""), total, company))
 
     if not rows:
         return pd.DataFrame(columns=HR_COST_COLS)
@@ -1388,6 +1398,19 @@ def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = No
     buckets: dict[tuple[int, str, str, str], dict[str, float | int | str]] = {}
 
     new_sources = _filter_sources(df_all, list(NEW_HR_SOURCES))
+    sole_pairs: list[tuple[int, str, str]] = []
+    for _, row in new_sources.iterrows():
+        yr = roc_year_from_value(row.get("roc_year"))
+        if yr is None:
+            continue
+        if filter_year is not None and yr != filter_year:
+            continue
+        project = clean_text(row.get("project_name"))
+        if not project:
+            continue
+        sole_pairs.append((yr, project, clean_text(row.get("company_name"))))
+    sole = _sole_named_company_map(sole_pairs)
+
     for _, row in new_sources.iterrows():
         yr = roc_year_from_value(row.get("roc_year"))
         if yr is None:
@@ -1398,7 +1421,7 @@ def build_monthly_total_frame(df_all: pd.DataFrame, filter_year: int | None = No
         project = clean_text(row.get("project_name"))
         if not project:
             continue
-        company = clean_text(row.get("company_name"))
+        company = clean_text(row.get("company_name")) or sole.get((yr, project), "")
 
         note = row.get("note")
         date_text = parse_note_value(note, "date")
