@@ -1,6 +1,5 @@
 import hashlib
 import re
-import calendar
 from datetime import date
 from io import BytesIO
 from typing import List
@@ -67,44 +66,33 @@ from hr_system_core import (
 )
 
 
-def pick_manual_date(key_prefix: str, default: date | None = None) -> date:
-    """同一格內用年/月/日下拉選日期，避免日曆月份選單被裁切。"""
+def parse_manual_date_text(value: object) -> date | None:
+    """解析手動輸入日期，支援 2024/04/4、2024/4/4、2024-04-04。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    m = re.match(r"^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$", text)
+    if not m:
+        return None
+    year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def pick_manual_date(key_prefix: str, default: date | None = None) -> date | None:
+    """單一欄位輸入日期，格式如 2024/04/4。"""
     today = default or date.today()
-    years = list(range(2022, 2032))
-    year_index = years.index(today.year) if today.year in years else max(0, min(len(years) - 1, today.year - 2022))
-    st.markdown(
-        "<div style='font-size:0.875rem; margin-bottom:0.25rem;'>日期</div>",
-        unsafe_allow_html=True,
+    placeholder = f"{today.year}/{today.month:02d}/{today.day}"
+    text = st.text_input(
+        "日期",
+        value=placeholder,
+        placeholder="例如 2024/04/4",
+        key=key_prefix,
+        help="格式：西元年/月/日，例如 2024/04/4",
     )
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        year = st.selectbox(
-            "年",
-            years,
-            index=year_index,
-            label_visibility="collapsed",
-            key=f"{key_prefix}_y",
-        )
-    with c2:
-        month = st.selectbox(
-            "月",
-            list(range(1, 13)),
-            index=today.month - 1,
-            format_func=lambda n: f"{n:02d}月",
-            label_visibility="collapsed",
-            key=f"{key_prefix}_m",
-        )
-    with c3:
-        day = st.selectbox(
-            "日",
-            list(range(1, 32)),
-            index=min(today.day, 31) - 1,
-            format_func=lambda n: f"{n:02d}日",
-            label_visibility="collapsed",
-            key=f"{key_prefix}_d",
-        )
-    max_day = calendar.monthrange(int(year), int(month))[1]
-    return date(int(year), int(month), min(int(day), max_day))
+    return parse_manual_date_text(text)
 
 
 def format_currency_df(
@@ -793,7 +781,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-23"
+APP_VERSION = "20260524-24"
 
 st.title("人事成本管理系統")
 st.caption(f"依「人事成本系統.xlsx」範本：全案總表、人事成本、在職年統計、個人所得。（版本 {APP_VERSION}）")
@@ -1087,7 +1075,7 @@ with tab_manual:
 
     with mtab1:
         with st.form("manual_case_form", clear_on_submit=True):
-            c1, c2, c3, c4 = st.columns([1, 1, 1, 1.6])
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
                 case_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_case_year")
             with c2:
@@ -1116,52 +1104,55 @@ with tab_manual:
                 st.info(f"請款額1% 自動帶入：{calc_request_pct(case_amount):,.0f}")
             submit_case = st.form_submit_button("新增全案總表資料（案場）")
         if submit_case:
-            signed_amount = float(case_amount)
-            if case_field in CASE_DELTA_FIELDS and case_op.startswith("扣除"):
-                signed_amount = -abs(signed_amount)
-            if case_field in CASE_OVERWRITE_FIELDS:
-                note_parts = [
-                    f"date:{case_date.isoformat()}",
-                    "mode:overwrite",
-                    f"field:{case_field}",
-                    f"{case_field}:{signed_amount}",
-                ]
-            elif case_field in CASE_DELTA_FIELDS:
-                note_parts = [
-                    f"date:{case_date.isoformat()}",
-                    "mode:delta",
-                    f"field:{case_field}",
-                    f"{case_field}:{signed_amount}",
-                ]
+            if case_date is None:
+                st.error("日期格式錯誤，請輸入如 2024/04/4。")
             else:
-                note_parts = [f"date:{case_date.isoformat()}", f"field:{case_field}", f"{case_field}:{signed_amount}"]
-            if case_field == "銷售請款額":
-                note_parts.append(f"請款額1%:{calc_request_pct(abs(case_amount))}")
-            if case_remark.strip():
-                note_parts.append(case_remark.strip())
-            save_import_records(
-                "全案總表手動",
-                "manual_case",
-                [{
-                    "sheet_name": "全案總表",
-                    "employee_name": None,
-                    "company_name": case_company,
-                    "project_name": case_project,
-                    "roc_year": int(case_year),
-                    "salary": 0.0,
-                    "bonus": 0.0,
-                    "welfare": 0.0,
-                    "total_income": 0.0,
-                    "note": append_note_parts(note_parts),
-                }],
-            )
-            st.success("已新增全案總表資料（案場）。")
-            st.rerun()
+                signed_amount = float(case_amount)
+                if case_field in CASE_DELTA_FIELDS and case_op.startswith("扣除"):
+                    signed_amount = -abs(signed_amount)
+                if case_field in CASE_OVERWRITE_FIELDS:
+                    note_parts = [
+                        f"date:{case_date.isoformat()}",
+                        "mode:overwrite",
+                        f"field:{case_field}",
+                        f"{case_field}:{signed_amount}",
+                    ]
+                elif case_field in CASE_DELTA_FIELDS:
+                    note_parts = [
+                        f"date:{case_date.isoformat()}",
+                        "mode:delta",
+                        f"field:{case_field}",
+                        f"{case_field}:{signed_amount}",
+                    ]
+                else:
+                    note_parts = [f"date:{case_date.isoformat()}", f"field:{case_field}", f"{case_field}:{signed_amount}"]
+                if case_field == "銷售請款額":
+                    note_parts.append(f"請款額1%:{calc_request_pct(abs(case_amount))}")
+                if case_remark.strip():
+                    note_parts.append(case_remark.strip())
+                save_import_records(
+                    "全案總表手動",
+                    "manual_case",
+                    [{
+                        "sheet_name": "全案總表",
+                        "employee_name": None,
+                        "company_name": case_company,
+                        "project_name": case_project,
+                        "roc_year": int(case_year),
+                        "salary": 0.0,
+                        "bonus": 0.0,
+                        "welfare": 0.0,
+                        "total_income": 0.0,
+                        "note": append_note_parts(note_parts),
+                    }],
+                )
+                st.success("已新增全案總表資料（案場）。")
+                st.rerun()
 
         st.markdown("#### 總公司")
         st.caption("總公司比例依「營收 + 營收(未進帳)」計算，不使用請款額1%。")
         with st.form("manual_hq_case_form", clear_on_submit=True):
-            h1, h2, h3, h4 = st.columns([1, 1, 1, 1.6])
+            h1, h2, h3, h4 = st.columns(4)
             with h1:
                 hq_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_hq_year")
             with h2:
@@ -1184,42 +1175,45 @@ with tab_manual:
                 st.caption("營收(未進帳)可累加；選「扣除」代表入帳後減少未進帳金額。")
             submit_hq = st.form_submit_button(f"新增全案總表資料（{HEADQUARTERS_PROJECT}）")
         if submit_hq:
-            signed_amount = float(hq_amount)
-            if hq_field in CASE_DELTA_FIELDS and hq_op.startswith("扣除"):
-                signed_amount = -abs(signed_amount)
-            if hq_field in CASE_DELTA_FIELDS:
-                note_parts = [
-                    f"date:{hq_date.isoformat()}",
-                    "mode:delta",
-                    f"field:{hq_field}",
-                    f"{hq_field}:{signed_amount}",
-                ]
+            if hq_date is None:
+                st.error("日期格式錯誤，請輸入如 2024/04/4。")
             else:
-                note_parts = [f"date:{hq_date.isoformat()}", f"field:{hq_field}", f"{hq_field}:{signed_amount}"]
-            if hq_remark.strip():
-                note_parts.append(hq_remark.strip())
-            save_import_records(
-                "全案總表手動",
-                "manual_hq_case",
-                [{
-                    "sheet_name": "全案總表",
-                    "employee_name": None,
-                    "company_name": hq_company,
-                    "project_name": HEADQUARTERS_PROJECT,
-                    "roc_year": int(hq_year),
-                    "salary": 0.0,
-                    "bonus": 0.0,
-                    "welfare": 0.0,
-                    "total_income": 0.0,
-                    "note": append_note_parts(note_parts),
-                }],
-            )
-            st.success(f"已新增全案總表資料（{HEADQUARTERS_PROJECT}）。")
-            st.rerun()
+                signed_amount = float(hq_amount)
+                if hq_field in CASE_DELTA_FIELDS and hq_op.startswith("扣除"):
+                    signed_amount = -abs(signed_amount)
+                if hq_field in CASE_DELTA_FIELDS:
+                    note_parts = [
+                        f"date:{hq_date.isoformat()}",
+                        "mode:delta",
+                        f"field:{hq_field}",
+                        f"{hq_field}:{signed_amount}",
+                    ]
+                else:
+                    note_parts = [f"date:{hq_date.isoformat()}", f"field:{hq_field}", f"{hq_field}:{signed_amount}"]
+                if hq_remark.strip():
+                    note_parts.append(hq_remark.strip())
+                save_import_records(
+                    "全案總表手動",
+                    "manual_hq_case",
+                    [{
+                        "sheet_name": "全案總表",
+                        "employee_name": None,
+                        "company_name": hq_company,
+                        "project_name": HEADQUARTERS_PROJECT,
+                        "roc_year": int(hq_year),
+                        "salary": 0.0,
+                        "bonus": 0.0,
+                        "welfare": 0.0,
+                        "total_income": 0.0,
+                        "note": append_note_parts(note_parts),
+                    }],
+                )
+                st.success(f"已新增全案總表資料（{HEADQUARTERS_PROJECT}）。")
+                st.rerun()
 
     with mtab2:
         with st.form("manual_hr_form", clear_on_submit=True):
-            c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.8])
+            c1, c2, c3, c4, c5 = st.columns(5)
             with c1:
                 hr_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_hr_year")
             with c2:
@@ -1268,6 +1262,8 @@ with tab_manual:
         if submit_hr:
             if not hr_name.strip():
                 st.error("請輸入姓名。")
+            elif hr_date is None:
+                st.error("日期格式錯誤，請輸入如 2024/04/4。")
             else:
                 item_amounts = {
                     "薪資": float(hr_item_amount) if hr_item == "薪資" else 0.0,
