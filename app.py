@@ -25,6 +25,7 @@ from database import (
     list_payroll_records,
     save_import_records,
     update_payroll_record,
+    count_batches_by_source,
 )
 from hr_system_core import (
     BONUS_TYPE_OPTIONS,
@@ -765,7 +766,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-25"
+APP_VERSION = "20260524-26"
 
 st.markdown(
     """
@@ -1412,29 +1413,53 @@ with tab_batches:
         st.rerun()
 
     batches = list_batches()
+    total_batches = count_import_batches()
+    st.caption(
+        f"目前共 **{total_batches}** 筆匯入批次（顯示最新 {len(batches)} 筆，**沒有只顯示本週**的限制）。"
+        "若找不到更早的上傳，可能當時已刪除，或部署時資料庫曾被重置。"
+    )
+    source_stats = count_batches_by_source()
+    if source_stats:
+        with st.expander("依來源統計批次", expanded=False):
+            st.dataframe(pd.DataFrame([dict(r) for r in source_stats]), use_container_width=True, hide_index=True)
+
     if batches:
         batch_df = pd.DataFrame([dict(r) for r in batches])
-        batch_search = st.text_input(
-            "搜尋批次（編號 / 來源 / 檔名）",
-            placeholder="例如 11、人事成本、xlsx",
-            key="batch_search",
-        )
+        f1, f2 = st.columns([2, 1])
+        with f1:
+            batch_search = st.text_input(
+                "搜尋批次（編號 / 來源 / 檔名）",
+                placeholder="例如 11、人事成本、xlsx；清空可看全部",
+                key="batch_search",
+            )
+        with f2:
+            source_choices = ["全部"] + sorted({str(b["source_type"] or "") for b in batches})
+            batch_source = st.selectbox("來源篩選", source_choices, key="batch_source_filter")
+
+        view_df = batch_df.copy()
+        if batch_source != "全部":
+            view_df = view_df[view_df["source_type"].astype(str) == batch_source]
         if batch_search.strip():
             q = batch_search.strip().lower()
-            mask = batch_df.astype(str).apply(
+            mask = view_df.astype(str).apply(
                 lambda row: any(q in str(v).lower() for v in row),
                 axis=1,
             )
-            batch_df = batch_df[mask]
-            if batch_df.empty:
-                st.info("查無符合的匯入批次。")
-        if not batch_df.empty:
-            st.dataframe(batch_df, use_container_width=True, hide_index=True)
+            view_df = view_df[mask]
+            if view_df.empty:
+                st.info("查無符合的匯入批次。請清空搜尋關鍵字，或改選「全部」來源。")
+        if not view_df.empty:
+            st.dataframe(view_df, use_container_width=True, hide_index=True)
+            st.caption(f"目前列表顯示 {len(view_df)} 筆。檔案匯入通常來源為「人事成本」，檔名為上傳檔名。")
+
         batch_options = {
             f"#{b['id']}｜{b['source_type']}｜{b['file_name']}｜{b['row_count']}筆｜{b['imported_at']}": int(b["id"])
             for b in batches
-            if not batch_search.strip()
-            or batch_search.strip().lower() in f"#{b['id']} {b['source_type']} {b['file_name']}".lower()
+            if (batch_source == "全部" or str(b["source_type"] or "") == batch_source)
+            and (
+                not batch_search.strip()
+                or batch_search.strip().lower() in f"#{b['id']} {b['source_type']} {b['file_name']}".lower()
+            )
         }
         if batch_options:
             selected_label = st.selectbox("選擇要刪除的批次", list(batch_options.keys()), key="delete_batch_select")
@@ -1444,7 +1469,7 @@ with tab_batches:
                 deleted_records, deleted_batches = delete_import_batch(bid)
                 st.success(f"已刪除批次 #{bid}：{deleted_records} 筆資料。")
                 st.rerun()
-        elif batch_search.strip():
+        elif batch_search.strip() or batch_source != "全部":
             st.info("查無符合的匯入批次可刪除。")
     else:
         st.info("尚無匯入紀錄。")

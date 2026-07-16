@@ -175,11 +175,23 @@ def list_payroll_records(
         return conn.execute(query, params).fetchall()
 
 
-def list_batches(limit: int = 100) -> List[sqlite3.Row]:
+def list_batches(limit: int = 5000) -> List[sqlite3.Row]:
     with closing(get_connection()) as conn:
         return conn.execute(
             "SELECT * FROM import_batches ORDER BY id DESC LIMIT ?",
             (limit,),
+        ).fetchall()
+
+
+def count_batches_by_source() -> List[sqlite3.Row]:
+    with closing(get_connection()) as conn:
+        return conn.execute(
+            """
+            SELECT source_type, COUNT(*) AS batch_count, SUM(row_count) AS row_count
+            FROM import_batches
+            GROUP BY source_type
+            ORDER BY batch_count DESC
+            """
         ).fetchall()
 
 
