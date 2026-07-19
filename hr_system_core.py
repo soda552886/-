@@ -29,6 +29,7 @@ HQ_CASE_FIELD_OPTIONS = ["營收", "營收(未進帳)"]
 CASE_FIELD_OPTIONS = ["總銷", "簽約金額", "銷售請款額", "請款淨額", "營收", "營收(未進帳)"]
 HR_ITEM_OPTIONS = ["勞保", "勞退", "健保", "二代", "所得稅", "執行業務所得", "薪資", "三節", "獎金", "員工福利"]
 HR_MANUAL_ITEM_OPTIONS = ["薪資", "三節", "獎金", "員工福利"]
+SITE_COST_ITEM_OPTIONS = ["餐費", "員工旅遊", "結業旅遊", "尾牙", "其他"]
 BONUS_TYPE_OPTIONS = ["個獎", "控獎", "裝個", "裝控", "端午", "中秋", "年終", "績效", "租賃", "特獎"]
 
 CASE_TOTAL_COLS = [
@@ -1321,7 +1322,8 @@ def build_yearly_stat_frame(df_all: pd.DataFrame) -> pd.DataFrame:
     for _, row in new_sources.iterrows():
         name = clean_text(row.get("employee_name"))
         if not name:
-            name = f"{row.get('project_name') or '未命名'}-彙總"
+            # 無姓名的紀錄（如案場成本）不列入個人在職年統計
+            continue
         yr = roc_year_from_value(row.get("roc_year"))
         if yr is None:
             continue

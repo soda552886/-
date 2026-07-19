@@ -43,6 +43,7 @@ from hr_system_core import (
     PERSONAL_INCOME_COLS,
     PROJECT_OPTIONS,
     SITE_PROJECT_OPTIONS,
+    SITE_COST_ITEM_OPTIONS,
     YEARLY_STAT_COLS,
     YEAR_OPTIONS,
     append_note_parts,
@@ -766,7 +767,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-26"
+APP_VERSION = "20260524-27"
 
 st.markdown(
     """
@@ -1074,7 +1075,7 @@ with tab_report:
 with tab_manual:
     st.subheader("手動新增資料")
     st.caption("規則同範本檔各分頁下方說明。請款額1% 會依銷售請款額自動計算（1%）。")
-    mtab1, mtab2 = st.tabs(["全案總表", "人事成本"])
+    mtab1, mtab2, mtab3 = st.tabs(["全案總表", "人事成本", "案場成本"])
 
     with mtab1:
         with st.form("manual_case_form", clear_on_submit=True):
@@ -1308,6 +1309,56 @@ with tab_manual:
                     }],
                 )
                 st.success("已新增人事成本資料（在職年統計、個人所得會自動連動）。")
+                st.rerun()
+
+    with mtab3:
+        st.caption("案場成本歸屬人事成本：金額會計入該案場的人事成本（員工福利欄）。")
+        with st.form("manual_site_cost_form", clear_on_submit=True):
+            s1, s2, s3, s4 = st.columns(4)
+            with s1:
+                sc_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_sc_year")
+            with s2:
+                sc_company = st.selectbox("公司名", COMPANY_OPTIONS, key="m_sc_company")
+            with s3:
+                sc_project = st.selectbox("案場", PROJECT_OPTIONS, key="m_sc_project")
+            with s4:
+                sc_date = pick_manual_date("m_sc_date")
+            s5, s6, s7 = st.columns([1, 1, 2])
+            with s5:
+                sc_item = st.selectbox("項目", SITE_COST_ITEM_OPTIONS, key="m_sc_item")
+            with s6:
+                sc_amount = st.number_input("金額", min_value=0.0, step=100.0, format="%.0f", key="m_sc_amount")
+            with s7:
+                sc_remark = st.text_input("備註（可空白）", key="m_sc_remark")
+            submit_sc = st.form_submit_button("新增案場成本資料")
+        if submit_sc:
+            if sc_amount <= 0:
+                st.error("請輸入金額。")
+            else:
+                note_parts = [
+                    f"date:{sc_date.isoformat()}",
+                    f"員工福利:{float(sc_amount)}",
+                    f"案場成本:{sc_item}",
+                ]
+                if sc_remark.strip():
+                    note_parts.append(sc_remark.strip())
+                save_import_records(
+                    "人事成本手動",
+                    "manual_site_cost",
+                    [{
+                        "sheet_name": "人事成本",
+                        "employee_name": None,
+                        "company_name": sc_company,
+                        "project_name": sc_project,
+                        "roc_year": int(sc_year),
+                        "salary": 0.0,
+                        "bonus": 0.0,
+                        "welfare": float(sc_amount),
+                        "total_income": float(sc_amount),
+                        "note": append_note_parts(note_parts),
+                    }],
+                )
+                st.success("已新增案場成本資料（計入人事成本的員工福利）。")
                 st.rerun()
 
 with tab_query:
