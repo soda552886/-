@@ -84,7 +84,49 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS custom_options (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                name TEXT NOT NULL,
+                UNIQUE(kind, name)
+            )
+            """
+        )
         conn.commit()
+
+
+def list_custom_options(kind: str) -> List[str]:
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            "SELECT name FROM custom_options WHERE kind = ? ORDER BY id",
+            (kind,),
+        ).fetchall()
+    return [str(r["name"]) for r in rows]
+
+
+def add_custom_option(kind: str, name: str) -> bool:
+    name = (name or "").strip()
+    if not name:
+        return False
+    with closing(get_connection()) as conn:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO custom_options (kind, name) VALUES (?, ?)",
+            (kind, name),
+        )
+        conn.commit()
+    return bool(cursor.rowcount)
+
+
+def delete_custom_option(kind: str, name: str) -> int:
+    with closing(get_connection()) as conn:
+        cursor = conn.execute(
+            "DELETE FROM custom_options WHERE kind = ? AND name = ?",
+            (kind, name),
+        )
+        conn.commit()
+    return int(cursor.rowcount or 0)
 
 
 def save_import_records(

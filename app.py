@@ -14,14 +14,17 @@ from openpyxl.utils import get_column_letter
 
 from database import (
     DB_PATH,
+    add_custom_option,
     clear_all_data,
     count_import_batches,
     count_payroll_records,
+    delete_custom_option,
     delete_import_batch,
     delete_payroll_records,
     delete_records_by_source,
     init_db,
     list_batches,
+    list_custom_options,
     list_payroll_records,
     save_import_records,
     update_payroll_record,
@@ -264,6 +267,16 @@ PROJECT_OPTIONS = [
     "總公司",
 ]
 INCOME_TYPE_OPTIONS = ["執行業務所得", "四倍獎金累計"]
+
+
+def get_company_options() -> list:
+    extra = [n for n in list_custom_options("company") if n not in COMPANY_OPTIONS]
+    return [*COMPANY_OPTIONS, *extra]
+
+
+def get_project_options() -> list:
+    extra = [n for n in list_custom_options("project") if n not in PROJECT_OPTIONS]
+    return [*PROJECT_OPTIONS, *extra]
 
 
 def parse_manual_category(note: object) -> str:
@@ -767,7 +780,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-29"
+APP_VERSION = "20260524-30"
 
 st.markdown(
     """
@@ -782,6 +795,65 @@ st.markdown(
         overflow: visible !important;
         max-height: none !important;
     }
+
+    /* ---- 介面美化 ---- */
+    h1 {
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        background: linear-gradient(90deg, #2563eb, #7c3aed);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    /* 主頁籤：膠囊樣式 */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 6px;
+        border-bottom: 1px solid rgba(120, 144, 180, 0.25);
+        padding-bottom: 0;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 10px 10px 0 0;
+        padding: 8px 20px;
+        background: rgba(37, 99, 235, 0.07);
+        font-weight: 600;
+    }
+    .stTabs [aria-selected="true"] {
+        background: #2563eb !important;
+        color: #ffffff !important;
+    }
+    .stTabs [aria-selected="true"] p {
+        color: #ffffff !important;
+    }
+    /* 表單卡片化 */
+    [data-testid="stForm"] {
+        border: 1px solid rgba(120, 144, 180, 0.28);
+        border-radius: 14px;
+        padding: 20px 20px 10px;
+        box-shadow: 0 2px 10px rgba(16, 24, 40, 0.06);
+    }
+    /* 按鈕圓角 */
+    .stButton > button,
+    .stDownloadButton > button,
+    [data-testid="stFormSubmitButton"] > button {
+        border-radius: 10px;
+        font-weight: 600;
+    }
+    /* 展開器 */
+    [data-testid="stExpander"] {
+        border: 1px solid rgba(120, 144, 180, 0.25);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+    /* 表格圓角與陰影 */
+    [data-testid="stDataFrame"] {
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 1px 6px rgba(16, 24, 40, 0.06);
+    }
+    /* 側欄 */
+    [data-testid="stSidebar"] {
+        border-right: 1px solid rgba(120, 144, 180, 0.2);
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -794,8 +866,9 @@ record_count = count_payroll_records()
 batch_count = count_import_batches()
 with st.sidebar:
     st.markdown("### 資料庫狀態")
-    st.text(f"紀錄：{record_count} 筆")
-    st.text(f"批次：{batch_count} 筆")
+    m1, m2 = st.columns(2)
+    m1.metric("紀錄", f"{record_count:,}")
+    m2.metric("批次", f"{batch_count:,}")
     st.caption(f"路徑：{DB_PATH}")
 
 local_ip = get_local_ip()
@@ -1100,6 +1173,56 @@ with tab_report:
 with tab_manual:
     st.subheader("手動新增資料")
     st.caption("規則同範本檔各分頁下方說明。請款額1% 會依銷售請款額自動計算（1%）。")
+
+    manual_company_options = get_company_options()
+    manual_project_options = get_project_options()
+    manual_site_project_options = [p for p in manual_project_options if p != HEADQUARTERS_PROJECT]
+
+    with st.expander("➕ 新增案場 / 公司選項"):
+        a1, a2 = st.columns(2)
+        with a1:
+            new_company_name = st.text_input("新增公司名", key="new_company_option", placeholder="例如 新公司")
+            if st.button("加入公司", key="add_company_option_btn"):
+                if not new_company_name.strip():
+                    st.error("請輸入公司名。")
+                elif new_company_name.strip() in manual_company_options:
+                    st.info("此公司已在選單中。")
+                else:
+                    add_custom_option("company", new_company_name.strip())
+                    st.success(f"已加入公司「{new_company_name.strip()}」。")
+                    st.rerun()
+        with a2:
+            new_project_name = st.text_input("新增案場", key="new_project_option", placeholder="例如 新案場")
+            if st.button("加入案場", key="add_project_option_btn"):
+                if not new_project_name.strip():
+                    st.error("請輸入案場名。")
+                elif new_project_name.strip() in manual_project_options:
+                    st.info("此案場已在選單中。")
+                else:
+                    add_custom_option("project", new_project_name.strip())
+                    st.success(f"已加入案場「{new_project_name.strip()}」。")
+                    st.rerun()
+
+        custom_companies = list_custom_options("company")
+        custom_projects = list_custom_options("project")
+        if custom_companies or custom_projects:
+            st.divider()
+            st.caption(
+                "自訂公司：" + ("、".join(custom_companies) if custom_companies else "無")
+                + "　｜　自訂案場：" + ("、".join(custom_projects) if custom_projects else "無")
+            )
+            remove_labels = [f"公司｜{n}" for n in custom_companies] + [f"案場｜{n}" for n in custom_projects]
+            r1, r2 = st.columns([2, 1])
+            with r1:
+                remove_choice = st.selectbox("刪除自訂選項", remove_labels, key="remove_custom_option_select")
+            with r2:
+                st.write("")
+                if st.button("刪除選項", key="remove_custom_option_btn"):
+                    kind, name = remove_choice.split("｜", 1)
+                    delete_custom_option("company" if kind == "公司" else "project", name)
+                    st.success(f"已刪除{kind}「{name}」。")
+                    st.rerun()
+
     mtab1, mtab2, mtab3 = st.tabs(["全案總表", "人事成本", "案場成本"])
 
     with mtab1:
@@ -1108,9 +1231,9 @@ with tab_manual:
             with c1:
                 case_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_case_year")
             with c2:
-                case_company = st.selectbox("公司名", COMPANY_OPTIONS, key="m_case_company")
+                case_company = st.selectbox("公司名", manual_company_options, key="m_case_company")
             with c3:
-                case_project = st.selectbox("案名", SITE_PROJECT_OPTIONS, key="m_case_project")
+                case_project = st.selectbox("案名", manual_site_project_options, key="m_case_project")
             with c4:
                 case_date = pick_manual_date("m_case_date")
             c5, c6, c7, c8 = st.columns(4)
@@ -1182,7 +1305,7 @@ with tab_manual:
             with h1:
                 hq_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_hq_year")
             with h2:
-                hq_company = st.selectbox("公司名", COMPANY_OPTIONS, key="m_hq_company")
+                hq_company = st.selectbox("公司名", manual_company_options, key="m_hq_company")
             with h3:
                 hq_remark = st.text_input("備註", key="m_hq_remark")
             with h4:
@@ -1240,11 +1363,11 @@ with tab_manual:
             with c1:
                 hr_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_hr_year")
             with c2:
-                hr_company = st.selectbox("公司名", COMPANY_OPTIONS, key="m_hr_company")
+                hr_company = st.selectbox("公司名", manual_company_options, key="m_hr_company")
             with c3:
                 hr_name = st.text_input("姓名", key="m_hr_name")
             with c4:
-                hr_project = st.selectbox("案場", PROJECT_OPTIONS, key="m_hr_project")
+                hr_project = st.selectbox("案場", manual_project_options, key="m_hr_project")
             with c5:
                 hr_date = pick_manual_date("m_hr_date")
 
@@ -1343,9 +1466,9 @@ with tab_manual:
             with s1:
                 sc_year = st.selectbox("年度", YEAR_OPTIONS, index=YEAR_OPTIONS.index("114"), key="m_sc_year")
             with s2:
-                sc_company = st.selectbox("公司名", COMPANY_OPTIONS, key="m_sc_company")
+                sc_company = st.selectbox("公司名", manual_company_options, key="m_sc_company")
             with s3:
-                sc_project = st.selectbox("案場", PROJECT_OPTIONS, key="m_sc_project")
+                sc_project = st.selectbox("案場", manual_project_options, key="m_sc_project")
             with s4:
                 sc_date = pick_manual_date("m_sc_date")
             s5, s6, s7 = st.columns([1, 1, 2])
