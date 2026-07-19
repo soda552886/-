@@ -767,7 +767,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-27"
+APP_VERSION = "20260524-28"
 
 st.markdown(
     """
@@ -975,10 +975,11 @@ with tab_report:
         if report_view == "全案總表":
             case_df = build_case_total_frame(df_all, filter_year)
             site_df = case_df[case_df["案場"] != HEADQUARTERS_PROJECT].copy()
+            site_case_cols = [c for c in CASE_TOTAL_COLS if c not in {"營收", "營收(未進帳)"}]
             show_report_table(
                 site_df,
-                CASE_TOTAL_COLS,
-                [c for c in CASE_TOTAL_COLS if c not in {"年度", "公司名", "案場"}],
+                site_case_cols,
+                [c for c in site_case_cols if c not in {"年度", "公司名", "案場"}],
                 "全案總表",
                 "全案總表_匯出.xlsx",
                 "case_total",
@@ -990,10 +991,14 @@ with tab_report:
             )
             st.markdown("#### 總公司")
             hq_df = case_df[case_df["案場"] == HEADQUARTERS_PROJECT].copy()
+            hq_case_cols = [
+                c for c in CASE_TOTAL_COLS
+                if c not in {"總銷", "簽約金額", "銷售請款額", "請款額1%", "請款淨額"}
+            ]
             show_report_table(
                 hq_df,
-                CASE_TOTAL_COLS,
-                [c for c in CASE_TOTAL_COLS if c not in {"年度", "公司名", "案場"}],
+                hq_case_cols,
+                [c for c in hq_case_cols if c not in {"年度", "公司名", "案場"}],
                 "全案總表（總公司）",
                 "全案總表_總公司_匯出.xlsx",
                 "case_total_hq",
@@ -1004,25 +1009,29 @@ with tab_report:
         elif report_view == "人事成本":
             hr_df = build_hr_cost_frame(df_all, filter_year)
             site_hr_df = hr_df[hr_df["案場"] != HEADQUARTERS_PROJECT].copy()
+            site_hr_cols = [c for c in HR_COST_COLS if c != "公司名"]
+            if not site_hr_df.empty:
+                site_hr_df = site_hr_df.groupby(["年度", "案場"], as_index=False).sum(numeric_only=True)
             show_report_table(
                 site_hr_df,
-                HR_COST_COLS,
-                [c for c in HR_COST_COLS if c not in {"年度", "公司名", "案場"}],
+                site_hr_cols,
+                [c for c in site_hr_cols if c not in {"年度", "案場"}],
                 "人事成本",
                 "人事成本_匯出.xlsx",
                 "hr_cost",
             )
             st.markdown("#### 總公司")
             hq_hr_df = hr_df[hr_df["案場"] == HEADQUARTERS_PROJECT].copy()
+            hq_hr_cols = [c for c in HR_COST_COLS if c != "獎金"]
             show_report_table(
                 hq_hr_df,
-                HR_COST_COLS,
-                [c for c in HR_COST_COLS if c not in {"年度", "公司名", "案場"}],
+                hq_hr_cols,
+                [c for c in hq_hr_cols if c not in {"年度", "公司名", "案場"}],
                 "人事成本（總公司）",
                 "人事成本_總公司_匯出.xlsx",
                 "hr_cost_hq",
             )
-            st.caption("依「年度 + 公司名 + 案場」彙總人事成本明細。")
+            st.caption("案場表依「年度 + 案場」彙總；總公司依「年度 + 公司名」彙總。")
         elif report_view == "在職年統計":
             yearly_df = build_yearly_stat_frame(df_all)
             show_report_table(
@@ -1048,10 +1057,13 @@ with tab_report:
         else:
             monthly_df = build_monthly_total_frame(df_all, filter_year)
             site_monthly_df = monthly_df[monthly_df["案場"] != HEADQUARTERS_PROJECT].copy()
+            site_monthly_cols = [c for c in MONTHLY_TOTAL_COLS if c != "公司名"]
+            if not site_monthly_df.empty:
+                site_monthly_df = site_monthly_df.groupby(["年度", "案場", "項目"], as_index=False).sum(numeric_only=True)
             show_report_table(
                 site_monthly_df,
-                MONTHLY_TOTAL_COLS,
-                [c for c in MONTHLY_TOTAL_COLS if c not in {"年度", "公司名", "案場", "項目"}],
+                site_monthly_cols,
+                [c for c in site_monthly_cols if c not in {"年度", "案場", "項目"}],
                 "月份總計",
                 "月份總計_匯出.xlsx",
                 "monthly_total",
