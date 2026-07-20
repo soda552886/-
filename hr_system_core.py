@@ -1153,6 +1153,32 @@ def _build_hr_cost_lookups(
     return hr_lookup, hr_company_lookup
 
 
+def _merge_blank_company_case_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """同年度+案場若僅一家非空白公司，將空白公司名列併入該公司。"""
+    if df.empty:
+        return df
+    out = df.copy()
+    numeric_cols = [c for c in CASE_TOTAL_COLS if c not in {"年度", "公司名", "案場", "比例"}]
+    drop_indices: list[int] = []
+    for (_, _), grp in out.groupby(["年度", "案場"]):
+        named = grp[grp["公司名"].astype(str).str.strip() != ""]
+        blank = grp[grp["公司名"].astype(str).str.strip() == ""]
+        if blank.empty or named.empty:
+            continue
+        named_companies = {str(c).strip() for c in named["公司名"] if str(c).strip()}
+        if len(named_companies) != 1:
+            continue
+        target_idx = named.index[0]
+        for idx in blank.index:
+            for col in numeric_cols:
+                out.at[target_idx, col] = float(out.at[target_idx, col] or 0) + float(out.at[idx, col] or 0)
+            drop_indices.append(idx)
+    if drop_indices:
+        out = out.drop(index=drop_indices)
+    out["比例"] = out.apply(case_row_hr_ratio, axis=1)
+    return out.reset_index(drop=True)
+
+
 def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None) -> pd.DataFrame:
     sources = _filter_sources(df_all, list(NEW_CASE_SOURCES))
 
@@ -1266,7 +1292,7 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
         last_vals = out.groupby(["年度", "公司名", "案場"], as_index=False)[col].last()
         grouped[col] = last_vals[col].values
     grouped["比例"] = grouped.apply(case_row_hr_ratio, axis=1)
-    return grouped[CASE_TOTAL_COLS]
+    return _merge_blank_company_case_rows(grouped[CASE_TOTAL_COLS])
 
 
 def _sole_named_company_map(pairs: list[tuple[int, str, str]]) -> dict[tuple[int, str], str]:

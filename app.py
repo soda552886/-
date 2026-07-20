@@ -780,7 +780,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-30"
+APP_VERSION = "20260524-31"
 
 st.markdown(
     """
@@ -993,13 +993,13 @@ with tab_report:
         filter_year = None if fy == "全部" else int(fy)
         report_view = st.selectbox("選擇報表", ["全案總表", "人事成本", "在職年統計", "個人所得", "月份總計"], key="report_view")
 
-        def pick_report_filter(df: pd.DataFrame, column: str, label: str, key: str) -> pd.DataFrame:
+        def pick_keyword_filter(df: pd.DataFrame, column: str, label: str, key: str) -> pd.DataFrame:
             if df.empty or column not in df.columns:
                 return df
-            options = ["全部"] + sorted({str(v).strip() for v in df[column].dropna().astype(str) if str(v).strip()})
-            choice = st.selectbox(label, options, key=key)
-            if choice != "全部":
-                return df[df[column].astype(str).str.strip() == choice]
+            keyword = st.text_input(label, placeholder="輸入關鍵字篩選，空白顯示全部", key=key)
+            if keyword.strip():
+                q = keyword.strip().lower()
+                return df[df[column].astype(str).str.lower().str.contains(q, na=False, regex=False)]
             return df
 
         def show_report_table(
@@ -1094,7 +1094,7 @@ with tab_report:
             site_hr_cols = [c for c in HR_COST_COLS if c != "公司名"]
             if not site_hr_df.empty:
                 site_hr_df = site_hr_df.groupby(["年度", "案場"], as_index=False).sum(numeric_only=True)
-            site_hr_df = pick_report_filter(site_hr_df, "案場", "篩選案場", "hr_cost_site_filter")
+            site_hr_df = pick_keyword_filter(site_hr_df, "案場", "搜尋案場", "hr_cost_site_filter")
             show_report_table(
                 site_hr_df,
                 site_hr_cols,
@@ -1117,7 +1117,7 @@ with tab_report:
             st.caption("案場表依「年度 + 案場」彙總；總公司依「年度 + 公司名」彙總。")
         elif report_view == "在職年統計":
             yearly_df = build_yearly_stat_frame(df_all)
-            yearly_df = pick_report_filter(yearly_df, "姓名", "篩選姓名", "yearly_name_filter")
+            yearly_df = pick_keyword_filter(yearly_df, "姓名", "搜尋姓名", "yearly_name_filter")
             show_report_table(
                 yearly_df,
                 YEARLY_STAT_COLS,
@@ -1129,7 +1129,7 @@ with tab_report:
             st.caption("資料條件：人事成本中的「薪資 + 獎金」。")
         elif report_view == "個人所得":
             income_df = build_personal_income_frame(df_all, filter_year)
-            income_df = pick_report_filter(income_df, "姓名", "篩選姓名", "income_name_filter")
+            income_df = pick_keyword_filter(income_df, "姓名", "搜尋姓名", "income_name_filter")
             show_report_table(
                 income_df,
                 PERSONAL_INCOME_COLS,
@@ -1145,7 +1145,7 @@ with tab_report:
             site_monthly_cols = [c for c in MONTHLY_TOTAL_COLS if c != "公司名"]
             if not site_monthly_df.empty:
                 site_monthly_df = site_monthly_df.groupby(["年度", "案場", "項目"], as_index=False).sum(numeric_only=True)
-            site_monthly_df = pick_report_filter(site_monthly_df, "案場", "篩選案場", "monthly_site_filter")
+            site_monthly_df = pick_keyword_filter(site_monthly_df, "案場", "搜尋案場", "monthly_site_filter")
             show_report_table(
                 site_monthly_df,
                 site_monthly_cols,
