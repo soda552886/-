@@ -780,7 +780,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-31"
+APP_VERSION = "20260524-32"
 
 st.markdown(
     """
@@ -844,11 +844,14 @@ st.markdown(
         border-radius: 12px;
         overflow: hidden;
     }
-    /* 表格圓角與陰影 */
+    /* 表格圓角與陰影（勿設 overflow:hidden，會裁掉全視窗按鈕） */
     [data-testid="stDataFrame"] {
         border-radius: 12px;
-        overflow: hidden;
         box-shadow: 0 1px 6px rgba(16, 24, 40, 0.06);
+    }
+    [data-testid="stDataFrame"] [data-testid="stElementToolbar"] {
+        opacity: 1 !important;
+        visibility: visible !important;
     }
     /* 側欄 */
     [data-testid="stSidebar"] {
@@ -1041,10 +1044,12 @@ with tab_report:
                 for c in text_cols[1:]:
                     total_kwargs[c] = ""
             display_df = pd.concat([display_df, pd.DataFrame([total_kwargs])], ignore_index=True)
+            table_height = min(720, max(240, 38 + len(display_df) * 35))
             st.dataframe(
                 format_currency_df(display_df, num_cols, percent_cols=percent_cols),
                 use_container_width=True,
                 hide_index=True,
+                height=table_height,
             )
             st.download_button(
                 f"匯出{title} Excel",
