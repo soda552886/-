@@ -98,15 +98,20 @@ def format_currency_df(
     fmt = {c: "{:,.0f}" for c in numeric_cols if c not in percent_cols}
     fmt.update({c: "{:.2f}%" for c in numeric_cols if c in percent_cols})
 
-    def highlight_total_row(row: pd.Series) -> List[str]:
-        is_total = str(row.iloc[0]).strip() == "合計"
+    def style_rows(row: pd.Series) -> List[str]:
+        values = [str(v).strip() for v in row.tolist()]
+        is_total = "合計" in values
         if is_total:
-            return ["background-color: #f1f5f9; font-weight: 700;" for _ in row]
+            # 藍底白字：亮/暗色模式都看得清楚
+            return ["background-color: #1d4ed8; color: #ffffff; font-weight: 700;" for _ in row]
+        # 斑馬紋：用半透明藍，暗色模式也不會整排變白塊
+        if isinstance(row.name, int) and row.name % 2 == 1:
+            return ["background-color: rgba(37, 99, 235, 0.14);" for _ in row]
         return ["" for _ in row]
 
     styler = (
         df.style.format(fmt)
-        .apply(highlight_total_row, axis=1)
+        .apply(style_rows, axis=1)
         .set_properties(subset=numeric_cols, **{"text-align": "right"})
         .set_properties(subset=[df.columns[0]], **{"text-align": "left"})
     )
@@ -780,7 +785,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-32"
+APP_VERSION = "20260524-33"
 
 st.markdown(
     """
@@ -852,6 +857,13 @@ st.markdown(
     [data-testid="stDataFrame"] [data-testid="stElementToolbar"] {
         opacity: 1 !important;
         visibility: visible !important;
+    }
+    /* 標題列更醒目（亮/暗模式皆可讀） */
+    [data-testid="stDataFrame"] thead tr th,
+    [data-testid="stDataFrame"] [role="columnheader"] {
+        background-color: #1e3a8a !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
     }
     /* 側欄 */
     [data-testid="stSidebar"] {
@@ -1044,7 +1056,8 @@ with tab_report:
                 for c in text_cols[1:]:
                     total_kwargs[c] = ""
             display_df = pd.concat([display_df, pd.DataFrame([total_kwargs])], ignore_index=True)
-            table_height = min(720, max(240, 38 + len(display_df) * 35))
+            # 盡量一次看完：每列約 38px，上限拉高，仍保留全視窗按鈕
+            table_height = min(1200, max(480, 48 + len(display_df) * 38))
             st.dataframe(
                 format_currency_df(display_df, num_cols, percent_cols=percent_cols),
                 use_container_width=True,
