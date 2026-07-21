@@ -785,7 +785,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-33"
+APP_VERSION = "20260524-34"
 
 st.markdown(
     """
@@ -858,12 +858,22 @@ st.markdown(
         opacity: 1 !important;
         visibility: visible !important;
     }
-    /* 標題列更醒目（亮/暗模式皆可讀） */
+    /* 標題列更醒目（與合計列同色藍底白字） */
     [data-testid="stDataFrame"] thead tr th,
     [data-testid="stDataFrame"] [role="columnheader"] {
-        background-color: #1e3a8a !important;
+        background-color: #1d4ed8 !important;
         color: #ffffff !important;
         font-weight: 700 !important;
+    }
+    /* 避免最後一列／儲存格被裁切 */
+    [data-testid="stDataFrame"] [role="gridcell"],
+    [data-testid="stDataFrame"] [role="cell"] {
+        line-height: 1.45 !important;
+        padding-top: 8px !important;
+        padding-bottom: 8px !important;
+    }
+    [data-testid="stDataFrame"] > div {
+        padding-bottom: 12px !important;
     }
     /* 側欄 */
     [data-testid="stSidebar"] {
@@ -1017,6 +1027,15 @@ with tab_report:
                 return df[df[column].astype(str).str.lower().str.contains(q, na=False, regex=False)]
             return df
 
+        def pick_dropdown_filter(df: pd.DataFrame, column: str, label: str, key: str) -> pd.DataFrame:
+            if df.empty or column not in df.columns:
+                return df
+            options = ["全部"] + sorted({str(v).strip() for v in df[column].dropna().astype(str) if str(v).strip()})
+            choice = st.selectbox(label, options, key=key)
+            if choice != "全部":
+                return df[df[column].astype(str).str.strip() == choice]
+            return df
+
         def show_report_table(
             df: pd.DataFrame,
             cols: list[str],
@@ -1056,8 +1075,8 @@ with tab_report:
                 for c in text_cols[1:]:
                     total_kwargs[c] = ""
             display_df = pd.concat([display_df, pd.DataFrame([total_kwargs])], ignore_index=True)
-            # 盡量一次看完：每列約 38px，上限拉高，仍保留全視窗按鈕
-            table_height = min(1200, max(480, 48 + len(display_df) * 38))
+            # 多留底部空間，避免合計列被裁切
+            table_height = min(1400, max(560, 100 + len(display_df) * 42))
             st.dataframe(
                 format_currency_df(display_df, num_cols, percent_cols=percent_cols),
                 use_container_width=True,
@@ -1112,7 +1131,7 @@ with tab_report:
             site_hr_cols = [c for c in HR_COST_COLS if c != "公司名"]
             if not site_hr_df.empty:
                 site_hr_df = site_hr_df.groupby(["年度", "案場"], as_index=False).sum(numeric_only=True)
-            site_hr_df = pick_keyword_filter(site_hr_df, "案場", "搜尋案場", "hr_cost_site_filter")
+            site_hr_df = pick_dropdown_filter(site_hr_df, "案場", "篩選案場", "hr_cost_site_filter")
             show_report_table(
                 site_hr_df,
                 site_hr_cols,
@@ -1163,7 +1182,7 @@ with tab_report:
             site_monthly_cols = [c for c in MONTHLY_TOTAL_COLS if c != "公司名"]
             if not site_monthly_df.empty:
                 site_monthly_df = site_monthly_df.groupby(["年度", "案場", "項目"], as_index=False).sum(numeric_only=True)
-            site_monthly_df = pick_keyword_filter(site_monthly_df, "案場", "搜尋案場", "monthly_site_filter")
+            site_monthly_df = pick_dropdown_filter(site_monthly_df, "案場", "篩選案場", "monthly_site_filter")
             show_report_table(
                 site_monthly_df,
                 site_monthly_cols,
@@ -1529,7 +1548,10 @@ with tab_manual:
 
 with tab_query:
     st.subheader("已匯入資料查詢")
-    st.caption("逐筆顯示，不合併。")
+    st.caption(
+        "逐筆顯示，不合併。"
+        "「資料ID」= 單筆編號（刪除請用這個）；「批次ID」= 同一批匯入的編號（刪整批請到匯入紀錄）。"
+    )
     q1, q2, q3 = st.columns([2, 1, 1])
     with q1:
         keyword = st.text_input("關鍵字（姓名/公司/案場）", placeholder="輸入關鍵字")
@@ -1566,29 +1588,52 @@ with tab_query:
             "total_income",
         ]
         editable_df = df[base_cols].copy()
+        editable_df = editable_df.rename(
+            columns={
+                "id": "資料ID",
+                "batch_id": "批次ID",
+                "source_type": "來源",
+                "sheet_name": "分頁",
+                "employee_name": "姓名",
+                "company_name": "公司名",
+                "project_name": "案場",
+                "roc_year": "年度",
+                "salary": "薪資",
+                "bonus": "獎金",
+                "welfare": "員工福利",
+                "total_income": "總計",
+            }
+        )
         editable_df["獎項"] = df["note"].map(lambda n: parse_note_value(n, "獎項"))
         editable_df["次數"] = df["note"].map(lambda n: parse_note_value(n, "次數") or "1")
         editable_df["備註"] = df["note"].map(parse_note_remark)
         note_by_id = df.set_index("id")["note"].to_dict()
-        edited = st.data_editor(editable_df, use_container_width=True, hide_index=True, key="query_inline_editor")
+        query_height = min(900, max(360, 80 + len(editable_df) * 38))
+        edited = st.data_editor(
+            editable_df,
+            use_container_width=True,
+            hide_index=True,
+            height=query_height,
+            key="query_inline_editor",
+        )
         c1, c2 = st.columns(2)
         with c1:
             if st.button("儲存目前編輯", key="save_inline_edit"):
                 for _, row in edited.iterrows():
-                    rid = int(row["id"])
+                    rid = int(row["資料ID"])
                     old_note = note_by_id.get(rid, "")
                     update_payroll_record(
                         rid,
                         {
-                            "sheet_name": row["sheet_name"],
-                            "employee_name": row["employee_name"],
-                            "company_name": row["company_name"],
-                            "project_name": row["project_name"],
-                            "roc_year": None if pd.isna(row["roc_year"]) else int(row["roc_year"]),
-                            "salary": float(row["salary"] or 0),
-                            "bonus": float(row["bonus"] or 0),
-                            "welfare": float(row["welfare"] or 0),
-                            "total_income": float(row["total_income"] or 0),
+                            "sheet_name": row["分頁"],
+                            "employee_name": row["姓名"],
+                            "company_name": row["公司名"],
+                            "project_name": row["案場"],
+                            "roc_year": None if pd.isna(row["年度"]) else int(row["年度"]),
+                            "salary": float(row["薪資"] or 0),
+                            "bonus": float(row["獎金"] or 0),
+                            "welfare": float(row["員工福利"] or 0),
+                            "total_income": float(row["總計"] or 0),
                             "note": rebuild_note_display_fields(
                                 old_note,
                                 row["獎項"],
@@ -1600,8 +1645,12 @@ with tab_query:
                 st.success("已儲存修改。")
                 st.rerun()
         with c2:
-            delete_ids_text = st.text_input("刪除ID（逗號分隔）", placeholder="例如 12,15", key="query_delete_ids")
-            if st.button("刪除指定ID", key="delete_inline_ids"):
+            delete_ids_text = st.text_input(
+                "刪除資料ID（逗號分隔）",
+                placeholder="請填「資料ID」，例如 12,15",
+                key="query_delete_ids",
+            )
+            if st.button("刪除指定資料ID", key="delete_inline_ids"):
                 ids = [i.strip() for i in delete_ids_text.split(",") if i.strip()]
                 deleted = delete_payroll_records([int(i) for i in ids if i.isdigit()])
                 st.success(f"已刪除 {deleted} 筆。")

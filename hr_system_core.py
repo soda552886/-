@@ -29,7 +29,7 @@ HQ_CASE_FIELD_OPTIONS = ["營收", "營收(未進帳)"]
 CASE_FIELD_OPTIONS = ["總銷", "簽約金額", "銷售請款額", "請款淨額", "營收", "營收(未進帳)"]
 HR_ITEM_OPTIONS = ["勞保", "勞退", "健保", "二代", "所得稅", "執行業務所得", "薪資", "三節", "獎金", "員工福利"]
 HR_MANUAL_ITEM_OPTIONS = ["薪資", "三節", "獎金", "員工福利"]
-SITE_COST_ITEM_OPTIONS = ["餐費", "員工旅遊", "結業旅遊", "尾牙", "其他"]
+SITE_COST_ITEM_OPTIONS = ["餐費", "員工旅遊", "結案旅遊", "尾牙", "其他"]
 BONUS_TYPE_OPTIONS = ["個獎", "控獎", "裝個", "裝控", "端午", "中秋", "年終", "績效", "租賃", "特獎"]
 
 CASE_TOTAL_COLS = [
