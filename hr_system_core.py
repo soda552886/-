@@ -128,12 +128,17 @@ def append_note_parts(parts: list[str]) -> str:
 
 def parse_note_value(note: object, key: str) -> str:
     text = "" if pd.isna(note) else str(note)
-    match = re.search(rf"{re.escape(key)}:([^;]+)", text)
+    # 必須是完整鍵名（避免「年終獎金」誤判成「獎金」）
+    match = re.search(rf"(?:^|;|\|){re.escape(key)}:([^;|]+)", text)
     return match.group(1).strip() if match else ""
 
 
 def parse_note_number(note: object, key: str) -> float:
-    return to_number(parse_note_value(note, key))
+    text = "" if pd.isna(note) else str(note)
+    matches = re.findall(rf"(?:^|;|\|){re.escape(key)}:([^;|]+)", text)
+    if not matches:
+        return 0.0
+    return sum(to_number(m) for m in matches)
 
 
 def parse_note_remark(note: object) -> str:
@@ -362,7 +367,7 @@ def _normalize_case_note(note: object) -> str:
 
 
 def _hr_display_item(year: int, project: str, note: str, total: float, company: str = "") -> dict:
-    return {
+    item = {
         "年度": year,
         "公司名": company,
         "案場": project,
@@ -374,8 +379,10 @@ def _hr_display_item(year: int, project: str, note: str, total: float, company: 
         "三節": parse_note_number(note, "三節"),
         "獎金": parse_note_number(note, "獎金"),
         "員工福利": parse_note_number(note, "員工福利"),
-        "總計": total or sum(parse_note_number(note, k) for k in HR_NOTE_KEYS),
     }
+    # 總計一律用分項加總，避免 total_income 與畫面欄位不一致
+    item["總計"] = sum(float(item[k] or 0) for k in HR_COST_SUM_KEYS)
+    return item
 
 
 def legacy_hr_display_items(row: dict) -> list[dict]:
@@ -1331,6 +1338,7 @@ def build_hr_cost_frame(df_all: pd.DataFrame, filter_year: int | None = None) ->
     if not rows:
         return pd.DataFrame(columns=HR_COST_COLS)
     out = pd.DataFrame(rows).groupby(["年度", "公司名", "案場"], as_index=False).sum(numeric_only=True)
+    out["總計"] = out[HR_COST_SUM_KEYS].sum(axis=1)
     return out[HR_COST_COLS]
 
 

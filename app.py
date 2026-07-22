@@ -785,7 +785,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-34"
+APP_VERSION = "20260524-35"
 
 st.markdown(
     """
@@ -1058,6 +1058,11 @@ with tab_report:
                 display_df[c] = pd.to_numeric(display_df[c], errors="coerce").fillna(0.0)
             sum_cols = [c for c in num_cols if c not in percent_cols]
             total_kwargs: dict = {c: float(display_df[c].sum()) for c in sum_cols}
+            # 「總計」欄改為各分項／各月合計，避免把各列總計再加總造成膨脹
+            if "總計" in total_kwargs:
+                part_cols = [c for c in sum_cols if c != "總計"]
+                if part_cols:
+                    total_kwargs["總計"] = float(sum(total_kwargs[c] for c in part_cols))
             if "比例" in percent_cols and "人事成本" in display_df.columns:
                 hr_sum = float(display_df["人事成本"].sum())
                 if ratio_mode == "hq":
@@ -1131,6 +1136,9 @@ with tab_report:
             site_hr_cols = [c for c in HR_COST_COLS if c != "公司名"]
             if not site_hr_df.empty:
                 site_hr_df = site_hr_df.groupby(["年度", "案場"], as_index=False).sum(numeric_only=True)
+                cost_parts = [c for c in ["勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利"] if c in site_hr_df.columns]
+                if cost_parts:
+                    site_hr_df["總計"] = site_hr_df[cost_parts].sum(axis=1)
             site_hr_df = pick_dropdown_filter(site_hr_df, "案場", "篩選案場", "hr_cost_site_filter")
             show_report_table(
                 site_hr_df,
@@ -1143,6 +1151,11 @@ with tab_report:
             st.markdown("#### 總公司")
             hq_hr_df = hr_df[hr_df["案場"] == HEADQUARTERS_PROJECT].copy()
             hq_hr_cols = [c for c in HR_COST_COLS if c != "獎金"]
+            if not hq_hr_df.empty:
+                cost_parts = [c for c in ["勞保", "勞退", "健保", "二代", "薪資", "三節", "員工福利"] if c in hq_hr_df.columns]
+                if "總計" in hq_hr_df.columns and cost_parts:
+                    hq_hr_df = hq_hr_df.copy()
+                    hq_hr_df["總計"] = hq_hr_df[cost_parts].sum(axis=1)
             show_report_table(
                 hq_hr_df,
                 hq_hr_cols,
@@ -1182,6 +1195,9 @@ with tab_report:
             site_monthly_cols = [c for c in MONTHLY_TOTAL_COLS if c != "公司名"]
             if not site_monthly_df.empty:
                 site_monthly_df = site_monthly_df.groupby(["年度", "案場", "項目"], as_index=False).sum(numeric_only=True)
+                month_cols = [c for c in MONTHLY_TOTAL_COLS if c in site_monthly_df.columns and c.endswith("月")]
+                if month_cols and "總計" in site_monthly_df.columns:
+                    site_monthly_df["總計"] = site_monthly_df[month_cols].sum(axis=1)
             site_monthly_df = pick_dropdown_filter(site_monthly_df, "案場", "篩選案場", "monthly_site_filter")
             show_report_table(
                 site_monthly_df,
