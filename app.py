@@ -819,7 +819,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-36"
+APP_VERSION = "20260524-37"
 
 st.markdown(
     """
@@ -1663,16 +1663,20 @@ with tab_query:
         editable_df["次數"] = df["note"].map(lambda n: parse_note_value(n, "次數") or "1")
         editable_df["備註"] = df["note"].map(parse_note_remark)
         note_by_id = df.set_index("id")["note"].to_dict()
+        money_cols = ["薪資", "獎金", "員工福利", "總計"]
         query_height = min(900, max(360, 80 + len(editable_df) * 38))
-        edited = st.data_editor(
-            editable_df,
-            use_container_width=True,
-            hide_index=True,
-            height=query_height,
-            key="query_inline_editor",
+        render_report_table(
+            format_currency_df(editable_df, money_cols),
+            max_height=query_height,
         )
-        c1, c2 = st.columns(2)
-        with c1:
+        with st.expander("編輯資料（修改後請按儲存）", expanded=False):
+            edited = st.data_editor(
+                editable_df,
+                use_container_width=True,
+                hide_index=True,
+                height=min(520, query_height),
+                key="query_inline_editor",
+            )
             if st.button("儲存目前編輯", key="save_inline_edit"):
                 for _, row in edited.iterrows():
                     rid = int(row["資料ID"])
@@ -1699,17 +1703,16 @@ with tab_query:
                     )
                 st.success("已儲存修改。")
                 st.rerun()
-        with c2:
-            delete_ids_text = st.text_input(
-                "刪除資料ID（逗號分隔）",
-                placeholder="請填「資料ID」，例如 12,15",
-                key="query_delete_ids",
-            )
-            if st.button("刪除指定資料ID", key="delete_inline_ids"):
-                ids = [i.strip() for i in delete_ids_text.split(",") if i.strip()]
-                deleted = delete_payroll_records([int(i) for i in ids if i.isdigit()])
-                st.success(f"已刪除 {deleted} 筆。")
-                st.rerun()
+        delete_ids_text = st.text_input(
+            "刪除資料ID（逗號分隔）",
+            placeholder="請填「資料ID」，例如 12,15",
+            key="query_delete_ids",
+        )
+        if st.button("刪除指定資料ID", key="delete_inline_ids"):
+            ids = [i.strip() for i in delete_ids_text.split(",") if i.strip()]
+            deleted = delete_payroll_records([int(i) for i in ids if i.isdigit()])
+            st.success(f"已刪除 {deleted} 筆。")
+            st.rerun()
     else:
         st.info("查無資料。")
 
