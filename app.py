@@ -102,9 +102,7 @@ def format_currency_df(
         values = [str(v).strip() for v in row.tolist()]
         is_total = "合計" in values
         if is_total:
-            # 藍底白字：亮/暗色模式都看得清楚
             return ["background-color: #1d4ed8; color: #ffffff; font-weight: 700;" for _ in row]
-        # 斑馬紋：用半透明藍，暗色模式也不會整排變白塊
         if isinstance(row.name, int) and row.name % 2 == 1:
             return ["background-color: rgba(37, 99, 235, 0.14);" for _ in row]
         return ["" for _ in row]
@@ -114,8 +112,44 @@ def format_currency_df(
         .apply(style_rows, axis=1)
         .set_properties(subset=numeric_cols, **{"text-align": "right"})
         .set_properties(subset=[df.columns[0]], **{"text-align": "left"})
+        .set_table_styles(
+            [
+                {
+                    "selector": "th",
+                    "props": [
+                        ("background-color", "#1d4ed8"),
+                        ("color", "#ffffff"),
+                        ("font-weight", "700"),
+                        ("text-align", "center"),
+                        ("padding", "10px 8px"),
+                        ("border", "1px solid #1e40af"),
+                    ],
+                },
+                {
+                    "selector": "td",
+                    "props": [
+                        ("padding", "8px"),
+                        ("border", "1px solid rgba(120, 144, 180, 0.25)"),
+                    ],
+                },
+            ],
+            overwrite=False,
+        )
     )
     return styler
+
+
+def render_report_table(styled: pd.io.formats.style.Styler, max_height: int = 1200) -> None:
+    """用 HTML 表格呈現，標題列可真正套用藍底（st.dataframe 做不到）。"""
+    html = styled.hide(axis="index").to_html()
+    st.markdown(
+        f"""
+        <div class="report-table-wrap" style="max-height:{max_height}px;">
+        {html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def to_excel_bytes(
@@ -785,7 +819,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-35"
+APP_VERSION = "20260524-36"
 
 st.markdown(
     """
@@ -858,22 +892,30 @@ st.markdown(
         opacity: 1 !important;
         visibility: visible !important;
     }
-    /* 標題列更醒目（與合計列同色藍底白字） */
-    [data-testid="stDataFrame"] thead tr th,
-    [data-testid="stDataFrame"] [role="columnheader"] {
+    /* 報表 HTML 表格：標題列與合計同色藍底 */
+    .report-table-wrap {
+        overflow: auto;
+        border-radius: 12px;
+        box-shadow: 0 1px 6px rgba(16, 24, 40, 0.06);
+        border: 1px solid rgba(120, 144, 180, 0.25);
+        margin-bottom: 0.75rem;
+        background: transparent;
+    }
+    .report-table-wrap table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.92rem;
+    }
+    .report-table-wrap thead th {
+        position: sticky;
+        top: 0;
+        z-index: 3;
         background-color: #1d4ed8 !important;
         color: #ffffff !important;
         font-weight: 700 !important;
     }
-    /* 避免最後一列／儲存格被裁切 */
-    [data-testid="stDataFrame"] [role="gridcell"],
-    [data-testid="stDataFrame"] [role="cell"] {
-        line-height: 1.45 !important;
-        padding-top: 8px !important;
-        padding-bottom: 8px !important;
-    }
-    [data-testid="stDataFrame"] > div {
-        padding-bottom: 12px !important;
+    .report-table-wrap tbody td {
+        white-space: nowrap;
     }
     /* 側欄 */
     [data-testid="stSidebar"] {
@@ -1080,13 +1122,10 @@ with tab_report:
                 for c in text_cols[1:]:
                     total_kwargs[c] = ""
             display_df = pd.concat([display_df, pd.DataFrame([total_kwargs])], ignore_index=True)
-            # 多留底部空間，避免合計列被裁切
             table_height = min(1400, max(560, 100 + len(display_df) * 42))
-            st.dataframe(
+            render_report_table(
                 format_currency_df(display_df, num_cols, percent_cols=percent_cols),
-                use_container_width=True,
-                hide_index=True,
-                height=table_height,
+                max_height=table_height,
             )
             st.download_button(
                 f"匯出{title} Excel",
