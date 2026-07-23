@@ -140,15 +140,21 @@ def format_currency_df(
 
 
 def render_report_table(styled: pd.io.formats.style.Styler, max_height: int = 1200) -> None:
-    """用 HTML 表格呈現，標題列可真正套用藍底（st.dataframe 做不到）。"""
+    """用 HTML 表格呈現，標題列可真正套用藍底（st.dataframe 做不到）。
+
+    使用 st.html（勿用 st.markdown），避免大表被 Markdown 拆壞而露出 </div>、造成頁面卡死。
+    列數過多時改回虛擬捲動的 dataframe，避免一次塞進巨量 HTML。
+    """
+    try:
+        n_rows = len(styled.data)
+    except Exception:
+        n_rows = 0
+    if n_rows > 600:
+        st.dataframe(styled, use_container_width=True, hide_index=True, height=max_height)
+        return
     html = styled.hide(axis="index").to_html()
-    st.markdown(
-        f"""
-        <div class="report-table-wrap" style="max-height:{max_height}px;">
-        {html}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.html(
+        f'<div class="report-table-wrap" style="max-height:{max_height}px;overflow:auto;">{html}</div>'
     )
 
 
@@ -819,7 +825,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-37"
+APP_VERSION = "20260524-38"
 
 st.markdown(
     """
@@ -1258,7 +1264,7 @@ with tab_report:
             )
             st.caption(
                 "依「年度 + 公司名 + 案場 + 項目（薪資、獎金）」彙總；年度與全案總表相同（依匯入年度）。"
-                "獎金含三節；每月依發薪日期歸月：1 月 = 2 月整月、2 月 = 3 月整月，以此類推。"
+                "薪資含三節；每月依發薪日期歸月：1 月 = 2 月整月、2 月 = 3 月整月，以此類推。"
                 "（全案總表人事成本另含勞健退等，與本表薪資/獎金加總可能不同。）"
             )
 
@@ -1665,9 +1671,12 @@ with tab_query:
         note_by_id = df.set_index("id")["note"].to_dict()
         money_cols = ["薪資", "獎金", "員工福利", "總計"]
         query_height = min(900, max(360, 80 + len(editable_df) * 38))
-        render_report_table(
+        # 查詢筆數常很多，用虛擬捲動 dataframe（仍有藍白間隔），避免 HTML 大表卡死
+        st.dataframe(
             format_currency_df(editable_df, money_cols),
-            max_height=query_height,
+            use_container_width=True,
+            hide_index=True,
+            height=query_height,
         )
         with st.expander("編輯資料（修改後請按儲存）", expanded=False):
             edited = st.data_editor(

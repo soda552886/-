@@ -1405,12 +1405,13 @@ def _personal_income_gross(note: object, row: pd.Series | None = None) -> float:
 
 
 def _monthly_record_items(note: object, row: pd.Series | None = None) -> list[tuple[str, float]]:
+    """月份總計只顯示薪資／獎金兩列；三節併入薪資（不進獎金）。"""
     note_salary = parse_note_number(note, "薪資")
     note_bonus = parse_note_number(note, "獎金")
     note_festival = parse_note_number(note, "三節")
 
-    salary_amt = note_salary
-    bonus_amt = note_bonus + note_festival
+    salary_amt = note_salary + note_festival
+    bonus_amt = note_bonus
     if salary_amt <= 0 and bonus_amt <= 0 and row is not None:
         row_salary = float(row.get("salary") or 0)
         row_bonus = float(row.get("bonus") or 0)
