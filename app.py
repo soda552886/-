@@ -825,7 +825,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-38"
+APP_VERSION = "20260524-39"
 
 st.markdown(
     """
@@ -950,11 +950,15 @@ with st.expander("跨裝置開啟網站"):
     st.code("streamlit run app.py --server.address 0.0.0.0 --server.port 8501")
     st.write(f"其他裝置可開：`http://{local_ip}:8501`（請確認 Windows 防火牆允許 8501 連線）")
 
-tab_import, tab_report, tab_manual, tab_query, tab_batches = st.tabs(
-    ["匯入資料", "報表呈現", "手動新增", "資料查詢", "匯入紀錄"]
+section = st.radio(
+    "功能",
+    ["匯入資料", "報表呈現", "手動新增", "資料查詢", "匯入紀錄"],
+    horizontal=True,
+    key="main_section",
+    label_visibility="collapsed",
 )
 
-with tab_import:
+if section == "匯入資料":
     st.subheader("檔案匯入（人事成本明細）")
     st.caption(
         "上傳 Excel / CSV，欄位：年度、公司名、案名、姓名、日期、項目、金額、勞保、勞退、"
@@ -1049,7 +1053,7 @@ with tab_import:
         except Exception as exc:
             st.error(f"匯入失敗：{exc}")
 
-with tab_report:
+elif section == "報表呈現":
     st.subheader("報表呈現")
     records = list_payroll_records(limit=100000)
     if not records:
@@ -1268,7 +1272,7 @@ with tab_report:
                 "（全案總表人事成本另含勞健退等，與本表薪資/獎金加總可能不同。）"
             )
 
-with tab_manual:
+elif section == "手動新增":
     st.subheader("手動新增資料")
     st.caption("規則同範本檔各分頁下方說明。請款額1% 會依銷售請款額自動計算（1%）。")
 
@@ -1607,13 +1611,13 @@ with tab_manual:
                 st.success("已新增案場成本資料（計入人事成本的員工福利）。")
                 st.rerun()
 
-with tab_query:
+elif section == "資料查詢":
     st.subheader("已匯入資料查詢")
     st.caption(
         "逐筆顯示，不合併。"
         "「資料ID」= 單筆編號（刪除請用這個）；「批次ID」= 同一批匯入的編號（刪整批請到匯入紀錄）。"
     )
-    q1, q2, q3 = st.columns([2, 1, 1])
+    q1, q2, q3, q4 = st.columns([2, 1, 1, 1])
     with q1:
         keyword = st.text_input("關鍵字（姓名/公司/案場）", placeholder="輸入關鍵字")
     with q2:
@@ -1623,70 +1627,79 @@ with tab_query:
         )
     with q3:
         year_input = st.text_input("年度(民國)", placeholder="例如 114")
+    with q4:
+        page_size = st.selectbox("每頁筆數", [50, 100, 200, 500], index=1, key="query_page_size")
     roc_year = int(year_input) if year_input.strip().isdigit() else None
 
-    rows = list_payroll_records(keyword=keyword, source_type=source_type, roc_year=roc_year, limit=100000)
+    total_matched = count_payroll_records(keyword=keyword, source_type=source_type, roc_year=roc_year)
+    total_pages = max(1, (total_matched + page_size - 1) // page_size)
+    filter_key = f"{keyword}|{source_type}|{roc_year}|{page_size}"
+    if st.session_state.get("query_filter_key") != filter_key:
+        st.session_state["query_filter_key"] = filter_key
+        st.session_state["query_page"] = 1
+    if int(st.session_state.get("query_page", 1)) > total_pages:
+        st.session_state["query_page"] = 1
+    page = st.number_input(
+        f"頁碼（共 {total_matched:,} 筆 / {total_pages} 頁）",
+        min_value=1,
+        max_value=total_pages,
+        step=1,
+        key="query_page",
+    )
+    offset = (int(page) - 1) * int(page_size)
+    rows = list_payroll_records(
+        keyword=keyword,
+        source_type=source_type,
+        roc_year=roc_year,
+        limit=int(page_size),
+        offset=offset,
+    )
     if rows:
         df = pd.DataFrame([dict(r) for r in rows])
-        hidden = df[~df["source_type"].map(is_report_visible_source)]
-        if not hidden.empty:
+        if not df["source_type"].map(is_report_visible_source).all():
+            hidden_types = sorted(
+                {
+                    str(t)
+                    for t in df.loc[~df["source_type"].map(is_report_visible_source), "source_type"].unique()
+                }
+            )
             st.warning(
-                f"有 {len(hidden)} 筆來源為「{', '.join(sorted(hidden['source_type'].unique()))}」—"
+                f"本頁有舊格式來源「{', '.join(hidden_types)}」—"
                 "這類舊資料不會出現在報表，可到「匯入紀錄」刪除。"
             )
-        base_cols = [
-            "id",
-            "batch_id",
-            "source_type",
-            "sheet_name",
-            "employee_name",
-            "company_name",
-            "project_name",
-            "roc_year",
-            "salary",
-            "bonus",
-            "welfare",
-            "total_income",
-        ]
-        editable_df = df[base_cols].copy()
-        editable_df = editable_df.rename(
-            columns={
-                "id": "資料ID",
-                "batch_id": "批次ID",
-                "source_type": "來源",
-                "sheet_name": "分頁",
-                "employee_name": "姓名",
-                "company_name": "公司名",
-                "project_name": "案場",
-                "roc_year": "年度",
-                "salary": "薪資",
-                "bonus": "獎金",
-                "welfare": "員工福利",
-                "total_income": "總計",
+        view_df = pd.DataFrame(
+            {
+                "資料ID": df["id"],
+                "批次ID": df["batch_id"],
+                "來源": df["source_type"],
+                "分頁": df["sheet_name"],
+                "姓名": df["employee_name"],
+                "公司名": df["company_name"],
+                "案場": df["project_name"],
+                "年度": df["roc_year"],
+                "薪資": pd.to_numeric(df["salary"], errors="coerce").fillna(0),
+                "獎金": pd.to_numeric(df["bonus"], errors="coerce").fillna(0),
+                "員工福利": pd.to_numeric(df["welfare"], errors="coerce").fillna(0),
+                "總計": pd.to_numeric(df["total_income"], errors="coerce").fillna(0),
+                "獎項": df["note"].map(lambda n: parse_note_value(n, "獎項")),
+                "次數": df["note"].map(lambda n: parse_note_value(n, "次數") or "1"),
+                "備註": df["note"].map(parse_note_remark),
             }
         )
-        editable_df["獎項"] = df["note"].map(lambda n: parse_note_value(n, "獎項"))
-        editable_df["次數"] = df["note"].map(lambda n: parse_note_value(n, "次數") or "1")
-        editable_df["備註"] = df["note"].map(parse_note_remark)
         note_by_id = df.set_index("id")["note"].to_dict()
-        money_cols = ["薪資", "獎金", "員工福利", "總計"]
-        query_height = min(900, max(360, 80 + len(editable_df) * 38))
-        # 查詢筆數常很多，用虛擬捲動 dataframe（仍有藍白間隔），避免 HTML 大表卡死
-        st.dataframe(
-            format_currency_df(editable_df, money_cols),
-            use_container_width=True,
-            hide_index=True,
-            height=query_height,
-        )
-        with st.expander("編輯資料（修改後請按儲存）", expanded=False):
+        # 不加 Styler：大表套樣式會卡死；用原生 dataframe 虛擬捲動
+        st.dataframe(view_df, use_container_width=True, hide_index=True, height=520)
+        st.caption(f"顯示第 {offset + 1}–{offset + len(view_df)} 筆（本頁 {len(view_df)} 筆）。")
+
+        with st.expander("編輯本頁資料（修改後請按儲存）", expanded=False):
             edited = st.data_editor(
-                editable_df,
+                view_df,
                 use_container_width=True,
                 hide_index=True,
-                height=min(520, query_height),
-                key="query_inline_editor",
+                height=360,
+                key=f"query_inline_editor_p{page}_{page_size}",
             )
-            if st.button("儲存目前編輯", key="save_inline_edit"):
+            if st.button("儲存本頁編輯", key="save_inline_edit"):
                 for _, row in edited.iterrows():
                     rid = int(row["資料ID"])
                     old_note = note_by_id.get(rid, "")
@@ -1710,7 +1723,7 @@ with tab_query:
                             ),
                         },
                     )
-                st.success("已儲存修改。")
+                st.success("已儲存本頁修改。")
                 st.rerun()
         delete_ids_text = st.text_input(
             "刪除資料ID（逗號分隔）",
@@ -1725,7 +1738,7 @@ with tab_query:
     else:
         st.info("查無資料。")
 
-with tab_batches:
+elif section == "匯入紀錄":
     st.subheader("匯入批次紀錄")
     st.caption("可刪除單一批次（該次上傳的全部資料）；不影響其他批次或手動新增的資料。")
 

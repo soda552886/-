@@ -190,15 +190,13 @@ def save_import_records(
     return len(rows), batch_id
 
 
-def list_payroll_records(
+def _payroll_filter_sql(
     keyword: str = "",
     source_type: str = "全部",
     roc_year: Optional[int] = None,
-    limit: int = 500,
-) -> List[sqlite3.Row]:
-    query = "SELECT * FROM payroll_records WHERE 1=1"
+) -> tuple[str, List[object]]:
+    query = " FROM payroll_records WHERE 1=1"
     params: List[object] = []
-
     if keyword.strip():
         query += " AND (employee_name LIKE ? OR company_name LIKE ? OR project_name LIKE ?)"
         like_kw = f"%{keyword.strip()}%"
@@ -209,9 +207,29 @@ def list_payroll_records(
     if roc_year is not None:
         query += " AND roc_year = ?"
         params.append(roc_year)
+    return query, params
 
-    query += " ORDER BY id DESC LIMIT ?"
-    params.append(limit)
+
+def count_payroll_records(
+    keyword: str = "",
+    source_type: str = "全部",
+    roc_year: Optional[int] = None,
+) -> int:
+    where_sql, params = _payroll_filter_sql(keyword, source_type, roc_year)
+    with closing(get_connection()) as conn:
+        return int(conn.execute(f"SELECT COUNT(*){where_sql}", params).fetchone()[0])
+
+
+def list_payroll_records(
+    keyword: str = "",
+    source_type: str = "全部",
+    roc_year: Optional[int] = None,
+    limit: int = 500,
+    offset: int = 0,
+) -> List[sqlite3.Row]:
+    where_sql, params = _payroll_filter_sql(keyword, source_type, roc_year)
+    query = f"SELECT *{where_sql} ORDER BY id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, max(0, int(offset))])
 
     with closing(get_connection()) as conn:
         return conn.execute(query, params).fetchall()
