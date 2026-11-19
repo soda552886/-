@@ -825,7 +825,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-39"
+APP_VERSION = "20260524-40"
 
 st.markdown(
     """

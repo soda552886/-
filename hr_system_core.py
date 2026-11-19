@@ -1004,9 +1004,8 @@ def _row_amount(row: pd.Series, *column_names: str) -> float:
 
 def _case_note_from_row(row: pd.Series) -> str:
     sales_request = _row_amount(row, "銷售請款額")
-    request_pct = _row_amount(row, "請款額1%")
-    if request_pct == 0 and sales_request > 0:
-        request_pct = calc_request_pct(sales_request)
+    # 請款額1% 一律由銷售請款額推算，避免修改後殘留舊值
+    request_pct = calc_request_pct(sales_request)
     return append_note_parts(
         [
             f"總銷:{_row_amount(row, '總銷')}",
@@ -1182,6 +1181,8 @@ def _merge_blank_company_case_rows(df: pd.DataFrame) -> pd.DataFrame:
             drop_indices.append(idx)
     if drop_indices:
         out = out.drop(index=drop_indices)
+    if "銷售請款額" in out.columns:
+        out["請款額1%"] = out["銷售請款額"].map(calc_request_pct)
     out["比例"] = out.apply(case_row_hr_ratio, axis=1)
     return out.reset_index(drop=True)
 
@@ -1220,9 +1221,8 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
         if merged.get("總銷", 0) == 0:
             merged["總銷"] = parse_note_number(";".join(grp_sorted["note"].astype(str)), "全案總銷")
         sales_request = merged.get("銷售請款額", 0.0)
-        request_pct = merged.get("請款額1%", 0.0)
-        if request_pct == 0 and sales_request > 0:
-            request_pct = calc_request_pct(sales_request)
+        # 修改銷售請款額後，資料庫可能仍留舊的請款額1%；報表一律重算
+        request_pct = calc_request_pct(sales_request)
         hr_cost = merged.get("人事成本", 0.0)
         project_key = str(project or "")
         company_key = str(company or "")
@@ -1298,6 +1298,7 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
             continue
         last_vals = out.groupby(["年度", "公司名", "案場"], as_index=False)[col].last()
         grouped[col] = last_vals[col].values
+    grouped["請款額1%"] = grouped["銷售請款額"].map(calc_request_pct)
     grouped["比例"] = grouped.apply(case_row_hr_ratio, axis=1)
     return _merge_blank_company_case_rows(grouped[CASE_TOTAL_COLS])
 
