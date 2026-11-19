@@ -55,6 +55,8 @@ MONTH_NUM_TO_LABEL = {i + 1: label for i, label in enumerate(MONTH_LABELS)}
 MONTHLY_TOTAL_ITEMS = ["薪資", "獎金"]
 
 CASE_NOTE_KEYS = ["總銷", "簽約金額", "銷售請款額", "請款額1%", "請款淨額", "營收", "營收(未進帳)"]
+# 請款額1% 不從 note 累加（常因修改銷售請款額而殘留舊值），一律由銷售請款額推算
+CASE_DERIVED_KEYS = {"請款額1%"}
 CASE_OVERWRITE_FIELDS = {"總銷"}
 CASE_DELTA_FIELDS = {"營收(未進帳)"}
 HR_NOTE_KEYS = ["勞保", "勞退", "健保", "二代", "薪資", "三節", "獎金", "員工福利", "所得稅", "執行業務所得"]
@@ -225,6 +227,18 @@ def calc_hq_hr_ratio(hr_cost: float, revenue: float, revenue_pending: float) -> 
     return round((float(hr_cost or 0) / base) * 100, 4)
 
 
+def sync_request_pct_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """依銷售請款額重算請款額1%與比例（顯示層強制同步，不需重 KEY）。"""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "銷售請款額" in out.columns:
+        out["請款額1%"] = out["銷售請款額"].map(calc_request_pct)
+    if "比例" in out.columns:
+        out["比例"] = out.apply(case_row_hr_ratio, axis=1)
+    return out
+
+
 def case_row_hr_ratio(row: pd.Series | dict) -> float:
     hr_cost = float(row.get("人事成本") or 0)
     if is_headquarters_project(row.get("案場")):
@@ -233,7 +247,8 @@ def case_row_hr_ratio(row: pd.Series | dict) -> float:
             float(row.get("營收") or 0),
             float(row.get("營收(未進帳)") or 0),
         )
-    request_pct = float(row.get("請款額1%") or 0)
+    sales_request = float(row.get("銷售請款額") or 0)
+    request_pct = calc_request_pct(sales_request) if sales_request else float(row.get("請款額1%") or 0)
     if request_pct > 0:
         return calc_hr_ratio(hr_cost, request_pct)
     return float(row.get("比例") or 0)
@@ -1107,7 +1122,7 @@ def _filter_sources(df_all: pd.DataFrame, names: list[str]) -> pd.DataFrame:
 
 
 def _merge_case_notes(note_series: pd.Series) -> dict[str, float]:
-    summed = {key: 0.0 for key in CASE_NOTE_KEYS}
+    summed = {key: 0.0 for key in CASE_NOTE_KEYS if key not in CASE_DERIVED_KEYS}
     overwrite: dict[str, float] = {}
     extras = {"人事成本": 0.0, "比例": 0.0}
 
@@ -1117,6 +1132,8 @@ def _merge_case_notes(note_series: pd.Series) -> dict[str, float]:
         mode = parse_note_value(text, "mode")
 
         for key in CASE_NOTE_KEYS:
+            if key in CASE_DERIVED_KEYS:
+                continue
             val = parse_note_number(text, key)
             if val == 0 and field and field != key:
                 continue
@@ -1132,6 +1149,7 @@ def _merge_case_notes(note_series: pd.Series) -> dict[str, float]:
     for key, val in extras.items():
         if val != 0:
             merged[key] = merged.get(key, 0.0) + val
+    merged["請款額1%"] = calc_request_pct(merged.get("銷售請款額", 0.0))
     return merged
 
 
@@ -1298,9 +1316,7 @@ def build_case_total_frame(df_all: pd.DataFrame, filter_year: int | None = None)
             continue
         last_vals = out.groupby(["年度", "公司名", "案場"], as_index=False)[col].last()
         grouped[col] = last_vals[col].values
-    grouped["請款額1%"] = grouped["銷售請款額"].map(calc_request_pct)
-    grouped["比例"] = grouped.apply(case_row_hr_ratio, axis=1)
-    return _merge_blank_company_case_rows(grouped[CASE_TOTAL_COLS])
+    return sync_request_pct_columns(_merge_blank_company_case_rows(grouped[CASE_TOTAL_COLS]))
 
 
 def _sole_named_company_map(pairs: list[tuple[int, str, str]]) -> dict[tuple[int, str], str]:

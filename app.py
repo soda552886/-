@@ -57,6 +57,7 @@ from hr_system_core import (
     build_yearly_stat_frame,
     calc_hr_ratio,
     calc_request_pct,
+    sync_request_pct_columns,
     hq_revenue_base,
     delete_non_report_data,
     is_report_visible_source,
@@ -825,7 +826,7 @@ def parse_personal_income_workbook(file_bytes: bytes) -> List[dict]:
 st.set_page_config(page_title="薪資報表匯入管理系統", layout="wide")
 init_db()
 
-APP_VERSION = "20260524-40"
+APP_VERSION = "20260524-41"
 
 st.markdown(
     """
@@ -939,6 +940,7 @@ record_count = count_payroll_records()
 batch_count = count_import_batches()
 with st.sidebar:
     st.markdown("### 資料庫狀態")
+    st.caption(f"版本 {APP_VERSION}")
     m1, m2 = st.columns(2)
     m1.metric("紀錄", f"{record_count:,}")
     m2.metric("批次", f"{batch_count:,}")
@@ -1146,7 +1148,7 @@ elif section == "報表呈現":
             )
 
         if report_view == "全案總表":
-            case_df = build_case_total_frame(df_all, filter_year)
+            case_df = sync_request_pct_columns(build_case_total_frame(df_all, filter_year))
             site_df = case_df[case_df["案場"] != HEADQUARTERS_PROJECT].copy()
             site_case_cols = [c for c in CASE_TOTAL_COLS if c not in {"營收", "營收(未進帳)"}]
             show_report_table(
@@ -1378,7 +1380,8 @@ elif section == "手動新增":
             else:
                 note_parts = [f"date:{case_date.isoformat()}", f"field:{case_field}", f"{case_field}:{signed_amount}"]
             if case_field == "銷售請款額":
-                note_parts.append(f"請款額1%:{calc_request_pct(abs(case_amount))}")
+                # 與銷售請款額同號：扣除時請款額1% 也要減少，避免殘留舊值被累加
+                note_parts.append(f"請款額1%:{calc_request_pct(signed_amount)}")
             if case_remark.strip():
                 note_parts.append(case_remark.strip())
             save_import_records(
